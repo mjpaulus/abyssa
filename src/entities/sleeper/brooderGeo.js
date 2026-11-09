@@ -1165,7 +1165,8 @@ function tubeClump(rnd, cx, cz, rMin, rMax, hMin, hMax, hex) {
   return parts;
 }
 // A coralline / massive-sponge lump: a squashed, knobbled dome moulded onto the shell.
-function lump(rnd, cx, cz, rad, hex) {
+// (reefback) seat: how far under topH the dome is set (the reef's own 0.006, sized to its 0.024-0.035 lumps; the rock's growth passes its own)
+function lump(rnd, cx, cz, rad, hex, seat = 0.006) {
   const sh = {}, g = new THREE.SphereGeometry(1, 14, 8, 0, TAU, 0, Math.PI * 0.55), ph = rnd() * 10;
   const p = g.attributes.position;
   for (let i = 0; i < p.count; i++) {
@@ -1175,14 +1176,16 @@ function lump(rnd, cx, cz, rad, hex) {
   }
   g.computeVertexNormals();
   paint(g, hex, (i, q) => 0.6 + 0.5 * sst(-0.05 * rad, 0.5 * rad, q.getY(i)) * (0.8 + 0.4 * fbm(q.getX(i) * 40 + ph, q.getZ(i) * 40, 2, 5)));
-  g.translate(cx, topH(cx, cz, sh) - 0.006, cz);
+  g.translate(cx, topH(cx, cz, sh) - seat, cz);
   return g;
 }
 // A gorgonian sea fan, in one plane: a short trunk forking into tapering branches, and
 // the branches fused sideways into a LATTICE (each branch node bridged to its nearest
 // neighbours), so the fan is a net with holes through it, as in the painting.
-function fan(rnd, cx, cz, size, hex) {
-  const sh = {}, y0 = topH(cx, cz, sh) - 0.006, yaw = rnd() * TAU, parts = [], nodes = [];
+// (reefback) yaw0: the fan's plane turned to it (its face to the current) instead of the drawn yaw; the draw is still taken, so the
+// reef's own fans (reefGeo, every site) lay bit for bit as before
+function fan(rnd, cx, cz, size, hex, yaw0) {
+  const sh = {}, y0 = topH(cx, cz, sh) - 0.006, yawR = rnd() * TAU, yaw = yaw0 != null ? yaw0 : yawR, parts = [], nodes = [];
   const bar = (x0, y0b, x1, y1, r0, r1, k) => {
     const len = Math.hypot(x1 - x0, y1 - y0b);
     if (len < 1e-4) return;
@@ -1217,8 +1220,11 @@ function fan(rnd, cx, cz, size, hex) {
   return g;
 }
 // Encrusting sponge: a lumpy mat moulded to the shell, pores dark.
-function crust(rnd, cx, cz, rad, hex) {
-  const sh = {}, R = 26, A = 40, pos = [], col = [], uv = [], idx = [], ph = rnd() * 10;
+// (reefback) R / A: the mat's rings and spokes (the reef's own 26 x 40 by default: a small mat on the rock needs far fewer); rel: its relief
+// (1 the sponge mat; a coralline crust is a thin skin, ~0.3); seat: how far under topH its base is set (the reef's own 0.004, sized to its
+// 0.05-0.10 mats: a skin of rad 0.022 and relief 0.32 stands under 0.003 and sank with it; the rock's growth passes a seat that scales)
+function crust(rnd, cx, cz, rad, hex, R = 26, A = 40, rel = 1, seat = 0.004) {
+  const sh = {}, pos = [], col = [], uv = [], idx = [], ph = rnd() * 10;
   _rc.set(hex);
   const pores = []; for (let k = 0; k < 16; k++) pores.push([(rnd() - 0.5) * rad * 1.2, (rnd() - 0.5) * rad * 1.2, rad * (0.05 + 0.05 * rnd())]);
   for (let i = 0; i <= R; i++) for (let j = 0; j <= A; j++) {
@@ -1226,10 +1232,10 @@ function crust(rnd, cx, cz, rad, hex) {
     const edge = rad * (1 + 0.25 * Math.sin(a * 3 + ph) + 0.12 * Math.sin(a * 7 + ph * 2));
     const lx = Math.cos(a) * rr * edge, lz = Math.sin(a) * rr * edge, x = cx + lx, z = cz + lz;
     const lump = fbm(x * 3 + ph, z * 3, 2, 6), fine = fbm(x * 9 + ph, z * 9, 3, 6);
-    let bump = rad * Math.sqrt(Math.max(0, 1 - rr * rr)) * (0.10 + 0.30 * sst(0.35, 0.8, lump) + 0.08 * fine);
+    let bump = rel * rad * Math.sqrt(Math.max(0, 1 - rr * rr)) * (0.10 + 0.30 * sst(0.35, 0.8, lump) + 0.08 * fine);
     let k = (0.55 + 0.6 * lump) * (0.8 + 0.3 * fine);
-    for (const [px, pz, pr] of pores) { const d = Math.hypot(lx - px, lz - pz); if (d < pr) { bump -= rad * 0.06 * (1 - d / pr); k *= 0.25; } }
-    pos.push(x, topH(x, z, sh) - 0.004 + bump, z); uv.push(rr, j / A);
+    for (const [px, pz, pr] of pores) { const d = Math.hypot(lx - px, lz - pz); if (d < pr) { bump -= rel * rad * 0.06 * (1 - d / pr); k *= 0.25; } }
+    pos.push(x, topH(x, z, sh) - seat + bump, z); uv.push(rr, j / A);
     col.push(_rc.r * k, _rc.g * k, _rc.b * k);
   }
   for (let i = 0; i < R; i++) for (let j = 0; j < A; j++) {
@@ -1284,15 +1290,29 @@ export function eyeGeo() {
 // the spots burial.js growRock picks on the strip of her back that stands out of the dune (body-local shell units; the caller sets the
 // shell's height to the bake's top, setShellHeight, so every part moulds onto the sculpted rock). One geometry PER SPOT, so the caller can
 // drop any that strays off the strip; merged by the caller. spot: [kind, x, z, size, hueIndex]
+// (reefback, Michael 2026-10-31 "grow more coral") spot: [kind, x, z, size, hueIndex, yaw]. Kinds: fan (yaw: its plane turned to face
+// the current; the fan hues), crust (a sponge mat, its rings and spokes by its size), coralline (a thin pale skin of crustose coralline:
+// the same mat at a third of the relief, the coralline hues), lump, tube
 const RG_HUE = [0x6a5133, 0x4f5236, 0x5a3726, 0x766e5c, 0x3d3226, 0x695a4f, 0x5a3532];
+const RG_FAN = [0x5a3532, 0x5c4532, 0x4e3a3c];
+const RG_COR = [0x6e5d60, 0x766a66, 0x645a62, 0x7a6c5e];
+// (reefback) the seat of the rock growth's parts, in shell units UNDER topH (negative: stood on it). The reef's own parts sit 0.004 (a mat) and
+// 0.006 (a lump) under, sized to its 0.05-0.10 mats and 0.024-0.035 lumps; the growth's are 0.016-0.048 and 0.014-0.032, and at those seats
+// 51% of its skin and 38% of its lumps stood more than 3 cm under the DRAWN sculpted shell (the bake's top is not the drawn mesh).
+// A coralline skin's is RG_SEAT.skin x its relief x its radius, a lump's RG_SEAT.lump x its radius; at -0.3 and -0.15 the skins' base lies
+// 10% of the radius and the lumps' ring at the shell, and 7% and 14% are more than 3 cm under (the sponge mats, which keep the reef's 0.004,
+// 13-16%). reefGeo is passed none of this: bit for bit as before.
+export const RG_SEAT = { skin: -0.3, lump: -0.15 };
+const matRes = rad => [Math.max(8, Math.min(26, Math.round(rad * 260))), Math.max(14, Math.min(40, Math.round(rad * 420)))];
 export function rockGrowthParts(seed, spots) {
   const rnd = seededRand(seed), out = [];
-  for (const [kind, x, z, size, hi] of spots) {
+  for (const [kind, x, z, size, hi, yaw] of spots) {
     const hex = RG_HUE[hi % RG_HUE.length];
     let parts;
-    if (kind === 'fan') parts = [fan(rnd, x, z, size, RG_HUE[6])];
-    else if (kind === 'crust') parts = [crust(rnd, x, z, size, hex)];
-    else if (kind === 'lump') parts = [lump(rnd, x, z, size, hex)];
+    if (kind === 'fan') parts = [fan(rnd, x, z, size, RG_FAN[hi % RG_FAN.length], yaw)];
+    else if (kind === 'crust') { const [R, A] = matRes(size); parts = [crust(rnd, x, z, size, hex, R, A, 1)]; }
+    else if (kind === 'coralline') { const [R, A] = matRes(size); parts = [crust(rnd, x, z, size, RG_COR[hi % RG_COR.length], R, A, 0.32, RG_SEAT.skin * 0.32 * size)]; }
+    else if (kind === 'lump') parts = [lump(rnd, x, z, size, hex, RG_SEAT.lump * size)];
     else parts = tubeClump(rnd, x, z, size * 0.5, size * 0.8, size * 3.5, size * 6.5, hex);
     for (const p of parts) for (const k of Object.keys(p.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'color' && k !== 'uv') p.deleteAttribute(k);
     for (const p of parts) if (!p.attributes.uv) { const P = p.attributes.position, U = new Float32Array(P.count * 2); for (let i = 0; i < P.count; i++) { U[i * 2] = P.getX(i) * 4; U[i * 2 + 1] = P.getZ(i) * 4; } p.setAttribute('uv', new THREE.BufferAttribute(U, 2)); }

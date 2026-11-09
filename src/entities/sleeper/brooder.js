@@ -33,11 +33,11 @@ import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
-import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
+import { spawnPlume, spawnWake, spawnPour, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt, shellHiAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 import { REACH, reach } from './brooderPoint.js';
-import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
+import { SHED, shedTick, sandY, BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
   fitMoundJ, prepGrowthJ, jobSlice, growCover, limbRelease } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
@@ -724,9 +724,11 @@ export function makeBrooder(idx, cfg) {
   } else {
     // (velkath-buried-rock) buried: her bed in the burial's order (bedDown), no silt drift (the mound covers her: Task 3a). The sink
     // is read off the drawn shell, so the sculpt's landing beds her down again on the baked one
+    // (reefback) the sculpt cached (noHarpoon): the second bedDown is this frame's and lays the growth on the drawn rock, so the first lays none
+    // (it was grown on the procedural shell and thrown away at once: 53 + 41 ms headless); not cached, the procedural build shows until it lands
     bedDown(L, !!SC);
-    if (SC) { installSculpt(L, SC); if (L.dormant) bedDown(L); }
-    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L); else { poseAll(L, 0, null); L.keepIdx = keepOutline(L); } } });
+    if (SC) { installSculpt(L, SC); if (L.dormant) bedDown(L, false, true); }
+    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L, false, true); else { poseAll(L, 0, null); L.keepIdx = keepOutline(L); } } });
   }
   const pd = L.onDispose;
   // (pd holds makeMound's link when she is buried: the mound's mesh lifted out of L.grp, its geometry disposed, before disposeSleeper
@@ -746,7 +748,8 @@ function seatRite(L, noHarpoon = false) {
 // tongue of eggs lies on the sand exactly as shipped, and buried it is under the floor with her); then the sink, then (Task 3a) the
 // mound over the sunk pose and the growth on her back buried under it, then (Task 4) the harpoon on the crest. Called only when
 // L.buried: the shipped paths keep their own lines.
-function bedDown(L, noHarpoon = false) {
+// again: the second bed of one build (the sculpt's landing): L.growMs adds its growth to the first's instead of replacing it
+function bedDown(L, noHarpoon = false, again = false) {
   // (Task 7a) the rise's state, defined before use and reset at every bed (bedDown runs only while she is dormant): the dune drawn whole
   // (moundK 1), no crack, not stood
   L.moundK = 1; L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.risenUp = false; L.shoveN = 0; L.riseSheetN = 0;   // (Task 8: the plume's sheets spawned)
@@ -772,7 +775,7 @@ function bedDown(L, noHarpoon = false) {
   if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
   // (Task 5b) the weed and coral on the exposed rock (burial.js growRock: after the seat, so they keep clear of the iron), then the growth
   // outside the strip buried with her (prepGrowth)
-  if (L.mound) { growRock(L, L.mound); prepGrowth(L, L.mound); }
+  if (L.mound) { if (!(noHarpoon && L.dormant)) growRock(L, L.mound, again); prepGrowth(L, L.mound); }
 }
 
 // (velkath-buried-rock Task 12) a live L reused at a new bed (bedDown, the lab's place): no point under way, no calm verb pending (Task 10 review,
@@ -2252,7 +2255,9 @@ function keepShell(L, dt) {
 const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
 // (Task 8) the rise plume's spawn points on the FITTED dune (MD.M: a cloud bursts where the sand was); module level, so no closure or
 // array literal per rising frame
-const RISE_J = [0, 21, 43, 64, 85, 107];                                     // the crack's ring of six bearings
+const RISE_J = [0, 21, 43, 64, 85, 107];
+// (sandrise) the pour off her rim (above): s between pours at the shed's base rate (x 0.5 .. 2 over it)
+const POUR = { dt: 0.12 };                                     // the crack's ring of six bearings
 const ringAt = (MD, ring, j) => (ring * MD.COLS + (j % MD.COLS)) * 3;       // a dune vertex's offset
 export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
@@ -2275,7 +2280,7 @@ export function updateBrooder(L, dt, t, player) {
     else if (L.digging && !L.digJob) growCover(L, L.bury);   // (Task 12) the sand slides back up over it as she digs in
     else buryGrowth(L, L.bury > 0.5);
   }
-  if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there. uCrack / uCrackO lag the body a frame: M6, see crustTick)
+  if (L.crustU) { shedTick(L, dt); crustTick(L); }   // (sandrise: the shed's own clock, burial.js SHED) (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there. uCrack / uCrackO lag the body a frame: M6, see crustTick)
   L.t += dt;
   L.uni.uTime.value = L.t;
   const R = L.R;
@@ -2328,6 +2333,23 @@ export function updateBrooder(L, dt, t, player) {
         let o = ringAt(MD, 5, j0); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
         o = ringAt(MD, 5, j0 + 64); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
         L.riseSheetN = (L.riseSheetN || 0) + 1;
+      }
+    }
+    // (sandrise) THE POUR: while the shed runs (burial.js SHED, L.shedP) the sand pours off her RIM: a point of her shell's outline (keepIdx,
+    // the 32 outermost vertices by bearing), as she is posed now, over the drawn sand there, every POUR.dt s at the shed's rate (its fastest
+    // at the middle of the shed); outward from her centre along that bearing (plume.js spawnPour, render only)
+    if (BURY.plume && L.keepIdx && L.shedP > 0.02 && L.shedP < 1) {
+      L.pourT = (L.pourT || 0) - dt * (0.5 + 1.5 * Math.sin(Math.PI * L.shedP));
+      if (L.pourT <= 0) {
+        L.pourT = POUR.dt;
+        const k = (Math.random() * L.keepIdx.length) | 0, vi = L.keepIdx[k];
+        if (vi >= 0) {
+          const P = L.parts.shell.geometry.attributes.position, e = L.parts.shell.matrixWorld.elements, x = P.getX(vi), y = P.getY(vi), z = P.getZ(vi);
+          const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+          const gy = L.mound ? sandY(L.mound, wx, wz, L.idx) : terrainH(wx, wz, L.idx);
+          spawnPour(wx, Math.max(wy, gy) + 0.3, wz, wx - L.body.position.x, wz - L.body.position.z, 1, L.idx);
+          L.pourN = (L.pourN || 0) + 1;
+        }
       }
     }
   }

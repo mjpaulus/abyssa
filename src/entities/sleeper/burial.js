@@ -1063,7 +1063,11 @@ export function setSlabDust(f) { emitSlabDust = f; }
 export const CRUST_LOOKS = { shell: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0, drift: 0, dust: 0, flat: 0 }, light: { alb: 0.45, nrm: 0.35, rough: 0.5, sand: 0.45, cover: 0, drift: 0, dust: 0, flat: 0 },
   stone: { alb: 0.92, nrm: 0.85, rough: 0.9, sand: 0.7, cover: 0, drift: 0, dust: 0, flat: 0 },
   sand: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0.3, drift: 1.0, dust: 0.1, flat: 0.3 } };
-export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x3f4744 };
+// (sandrise) sandC 0x3f4744 -> 0x5a6663: the dune's silt hex laid on her drew no sand anyone could see (sandpix-probe crust `seen`: 2% of her
+// up pixels moved >= 6 codes of luma with the cover taken off, mean 1.4 codes): her own shell under it is about as dark in his light, while
+// the dune beside her reads lighter (the terrain's own lighting). 0x5a6663 is the dune's tone as it reads beside her (stills out/dev/sc-sheet:
+// none / 0x3f4744 / 0x5a6663 / 0x76837f; the last read as pale drifts, too bright). The knob: setCrust({ sandC })
+export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x5a6663, driftWorld: 1 };
 const CRUST_HEAD = `
 varying vec3 vCrW, vCrO;
 uniform float uBury, uCrack;
@@ -1076,6 +1080,10 @@ uniform float uCrustRough;
 uniform vec4 uWound;
 uniform vec3 uWoundN, uWoundD;
 uniform float uWoundS;
+uniform vec4 uShed;
+uniform vec3 uDownO;
+uniform float uDriftS;
+float crPaint = 0.0;
 vec4 crTri(sampler2D t, vec3 p, vec3 bw, float f) { return texture2D(t, p.zy * f) * bw.x + texture2D(t, p.xz * f) * bw.y + texture2D(t, p.xy * f) * bw.z; }
 vec3 crNrm(vec3 p, vec3 n, vec3 bw, float f, float str) {
   vec3 tx = texture2D(uCrustNrm, p.zy * f).xyz * 2.0 - 1.0, ty = texture2D(uCrustNrm, p.xz * f).xyz * 2.0 - 1.0, tz = texture2D(uCrustNrm, p.xy * f).xyz * 2.0 - 1.0;
@@ -1089,7 +1097,7 @@ float crVN(vec3 x) {
     mix(mix(crH(i + vec3(0.0, 0.0, 1.0)), crH(i + vec3(1.0, 0.0, 1.0)), f.x), mix(crH(i + vec3(0.0, 1.0, 1.0)), crH(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
 }`;
 const CRUST_APPLY = `
-if (uBury > 0.001) {
+if (uBury > 0.001 || uShed.x > 0.001) {
   vec3 crWN = normalize(inverseTransformDirection(normal, viewMatrix));
   vec3 crBW = pow(abs(crWN), vec3(4.0)); crBW /= (crBW.x + crBW.y + crBW.z);
   vec4 crPd = crTri(uCrustPack, vCrW, crBW, 0.32), crPc = crTri(uCrustPack, vCrW + vec3(7.3, 2.9, 5.1), crBW, 0.073);
@@ -1112,10 +1120,33 @@ if (uBury > 0.001) {
     float crCv = (dot(dFdx(crGN), crDx) + dot(dFdy(crGN), crDy)) / max(dot(crDx, crDx) + dot(crDy, crDy), 1e-6);
     float crUp = smoothstep(0.3, 0.85, crGN.y) * smoothstep(0.15, 0.6, crWN.y) * (1.0 - smoothstep(0.8, 2.5, crCv));
     float crPool = max(1.0 - smoothstep(0.35, 0.85, crAO), smoothstep(0.3, 1.5, -crCv)) * smoothstep(0.0, 0.3, crGN.y);
-    float crN0 = crVN(vCrO * vec3(0.4, 0.55, 0.4)), crN1 = crVN(vCrO * 1.4 + 17.0);
+    // (sandrise) THE SHED: the sand on her (uShed.x, crSB) has its own clock from the crack (uShed.y, crP: 0 asleep and digging in at
+    // bury 1, 1 once it has run): at crP 0 every line here is the shipped cover, read off uBury's value. Shedding, the field is read
+    // UPSLOPE of where it lies by how far the sand has run (uShed.z, in crQ's units: applied after the uDriftS scale, so WORLD units with
+    // driftWorld 1 and object units with driftWorld 0; steep faces run, flats hold), drawn out along the
+    // fall line into streams, and each spot lets go when the shed passes its own time (crLeave: steep faces first, then the flats, the
+    // hollows never): the threshold climbs THERE, so a drift shrinks from its thin edges to its core and runs, it does not fade
+    float crSB = uShed.x, crP = uShed.y, crSteep = 1.0 - crGN.y;
+    vec3 crQ = vCrO * uDriftS;
+    float crStr = 0.0;
+    if (crP > 0.0) {
+      float crSl = smoothstep(0.12, 0.55, crSteep);
+      crQ -= uDownO * (uShed.z * crSl);
+      crStr = crSl * min(1.0, crP * 3.0);
+      crQ -= uDownO * (dot(crQ, uDownO) * 0.7 * crStr);
+    }
+    float crN0 = crVN(crQ * vec3(0.4, 0.55, 0.4)), crN1 = crVN(crQ * 1.4 + 17.0);
     float crS = crUp * 0.6 + crPool * 0.4 + (crN0 * 0.65 + crN1 * 0.35 - 0.5) * 1.5 * uSandK.y;
-    float crT = 1.0 - uBury * uSandK.x;
-    float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 * min(1.0, uBury * 4.0) + uBury * uSandK.z * crUp;
+    float crT = 1.0 - crSB * uSandK.x;
+    float crVeil = crSB * uSandK.z * crUp;
+    if (crP > 0.0) {
+      float crN2 = crVN(crQ * 0.8 + 5.0);
+      crS += (crN2 - 0.5) * 0.7 * crStr;
+      float crLeave = 0.22 + 0.7 * crGN.y * crGN.y + 0.9 * crPool + 0.4 * (crN1 - 0.5);
+      crT += 1.3 * smoothstep(crLeave - 0.3, crLeave, crP);
+      crVeil *= 1.0 - smoothstep(0.0, 0.45, crP);
+    }
+    float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 * min(1.0, crSB * 4.0) + crVeil;
     crSand = max(crSand, min(crCov, 0.92));
     // (Task 7b) THE CRUST CRACKS: the sand on her breaks into plates along the rock map's crevice channel (crPk.b, the shipped fissure
     // network, sampled triplanar in her OWN frame: vCrO, it rides her as she rises), the lines widening with uCrack; in a line the sand is gone and the gap is dark
@@ -1136,7 +1167,9 @@ if (uBury > 0.001) {
       vec3 wnh = normalize(uWoundN - uWoundD * dot(uWoundN, uWoundD) + vec3(1e-5)), wsd = normalize(cross(uWoundD, wnh));
       float wy = dot(wq, uWoundD), wx = dot(wq, wsd), wd = dot(wq, wnh);
       float wR = length(wq), wz = crVN(wq * 3.3 + 11.0), wz2 = crVN(wq * 9.0 + 3.0);
-      float wK = uWound.w * smoothstep(0.0, 0.3, uBury);
+      // (sandrise) keyed to the cover the crust draws (crSB, uShed.x), not uBury: the sand on her now runs on its own clock (the shed), so
+      // on a rise from a pulled save the stain and its hole in the sand stay while sand is on her and go with it (as they went with bury on main)
+      float wK = uWound.w * smoothstep(0.0, 0.3, crSB);
       float wrb = 0.65 + 0.3 * wz;
       crWb = wK * (1.0 - smoothstep(wrb - 0.12, wrb, wR));
       float wrp = 0.09 + 0.06 * wz2;
@@ -1151,6 +1184,7 @@ if (uBury > 0.001) {
       crWv = wz2;
       crSand *= 1.0 - max(crWb, crWr);
     }
+    crPaint = crSand;
     roughnessFactor = mix(roughnessFactor, 0.95, crSand);
     normal = normalize(mix(normal, nonPerturbedNormal, crSand * uSandK.w));
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand * (0.85 + 0.3 * crN1), crSand);
@@ -1177,12 +1211,18 @@ if (uBury > 0.001) {
     }
   }
 }`;
+// (sandrise) the probe's PAINT (uShed.w 1, sandpix-probe only; the game never writes it): every fragment of her body's material drawn in
+// one of three pure hues after the material's own light and fog: RED where the sand cover is over the threshold (uShed.w - 1; paint(on, thr), default 0.3) on a face that looks up, BLUE a bare
+// face that looks up, GREEN any other face of hers. Read through the whole post chain by the dominant channel (the post bypass's frozen
+// capture is black on the plugged clock: burial-probe's wound header), so a capture reads the cover as drawn, through the depth test
+const CRUST_PAINT = 'if (uShed.w > 0.5) { float crPU = inverseTransformDirection(nonPerturbedNormal, viewMatrix).y; gl_FragColor = crPU > 0.5 ? (crPaint > uShed.w - 1.0 ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 0.0, 1.0, 1.0)) : vec4(0.0, 1.0, 0.0, 1.0); }';
 export function crustTerm(L, m, rockSet, rockC, sandC) {
   const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrackO: { value: V3() }, uCrackS: { value: 0.32 * L.R }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
     uRockC: { value: new THREE.Color(rockC) }, uSand: { value: new THREE.Color(sandC) },
     uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough },
     uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) },
-    uWound: { value: new THREE.Vector4(0, 0, 0, 0) }, uWoundN: { value: V3(0, 0, 1) }, uWoundD: { value: V3(0, -1, 0) }, uWoundS: { value: 1 } };
+    uWound: { value: new THREE.Vector4(0, 0, 0, 0) }, uWoundN: { value: V3(0, 0, 1) }, uWoundD: { value: V3(0, -1, 0) }, uWoundS: { value: 1 },
+    uShed: { value: new THREE.Vector4(0, 0, 0, 0) }, uDownO: { value: V3(0, -1, 0) }, uDriftS: { value: 1 } };
   L.crustU = u; L.crustSilt = new THREE.Color(sandC);   // (the zone's silt: setCrust({ sandC: null }) goes back to it)
   const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
   m.onBeforeCompile = function (sh, r) {
@@ -1191,7 +1231,8 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCrW, vCrO;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvCrW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvCrO = transformed;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>' + CRUST_HEAD)
-      .replace('#include <lights_physical_fragment>', CRUST_APPLY + '\n#include <lights_physical_fragment>');
+      .replace('#include <lights_physical_fragment>', CRUST_APPLY + '\n#include <lights_physical_fragment>')
+      .replace('#include <dithering_fragment>', '#include <dithering_fragment>\n' + CRUST_PAINT);
   };
   m.customProgramCacheKey = () => (prevKey ? prevKey.call(m) : '') + '|crust';
   m.needsUpdate = true;
@@ -1226,12 +1267,69 @@ export function setCrustWoundRec(L, rec, on) {
   u.uWoundN.value.copy(rec.n); u.uWoundD.value.copy(rec.d); u.uWoundS.value = rec.s;
   return true;
 }
+// (sandrise, 2026-10-31; card roadmap/velkath-sand-rise.md; Michael: "we lost that she is partially covered in sand and when she rises the
+// sand rolls off in a slight dust cloud", approved "yes do all three for the sand") THE SHED: the sand on her shell no longer goes with
+// L.bury (which reaches 0 at ~3.7 s, riseU, so she stood clean); it has its own clock from the crack. Two values, written into the crust's
+// uShed by crustTick: L.sandS, the sand on her (the cover's own "bury": the threshold and the fades read it in place of uBury), and L.shedP,
+// the shed's progress (0 .. 1 over T s from the crack). Asleep and dug in, shedP 0 and sandS = L.bury: the shipped cover, value for value.
+// Shedding, each spot of her shell lets go at its own time (the shader's crLeave: steep faces first, then her flats, her hollows not at all),
+// the drifts run down the fall line `run` u (accelerating, run x shedP^2) drawn out into streams, and what lies in her hollows when it has run
+// STAYS (the residual) until she has stood `hold` s, then drifts off over `restT` s (sandS eased to 0: the cover's own fade, no pop). Digging
+// in, shedP eases back to 0 as bury rises and sandS = max(what was left, bury): the dig-in ends on the asleep cover exactly.
+// Reference (out/report.md): sand on a body lifting off the bed avalanches where the slope passes repose (~30-35 deg) and runs in sheets off
+// the high edges; the flats keep it longer and the hollows keep it.
+//   T s, the shed (from the crack; her rise's bury runs out at ~3.7 s); run u, how far a drift on a steep face has slid by the end (WORLD units
+//   with CRUST.driftWorld 1, the shipped value: the shader applies it after the uDriftS scale; object units, her shell x15.4, with driftWorld 0);
+//   hold / restT s. on 0 = the shipped cover (sandS = bury) AND shedT stays 0, so RISECAM's 'until' (game.js; it reads L.shedT) never closes
+//   its window: the cue then runs until she stands
+export const SHED = { on: 1, T: 3.8, pow: 1.4, run: 3.0, hold: 20, restT: 90 };
+const _shInv = new THREE.Matrix4();
+// the shed's progress from the crack: slow to start (the sand holds through the crack and her first heave), then it runs (pow)
+function shedCurve(t) { const x = Math.min(1, Math.max(0, t / SHED.T)); return Math.pow(x, SHED.pow); }
+export function shedTick(L, dt) {
+  if (!L.buried || !(SHED.on > 0)) { L.shedP = 0; L.sandS = L.bury; L.shedT = 0; L.shedDig = false; return; }
+  if (L.digging || (L.dugIn && !L.cracked)) {
+    if (!L.shedDig) { L.shedDig = true; L.shedP0 = L.shedP || 0; L.sandS0 = L.sandS ?? 0; }
+    L.shedP = L.shedP0 * (1 - L.bury); L.sandS = Math.max(L.sandS0, L.bury);
+    // dug in: the shed's clocks start over, so a later crack on this same L sheds from its own zero (a failed dig-in keeps them: below)
+    if (L.dugIn) { L.shedT = 0; L.stoodT = 0; }
+    return;
+  }
+  L.shedDig = false;
+  // a dig-in that threw (brooder.js digStep: L.digFail, she stays risen and beginDig has put cracked and hasStood back): the shed state is
+  // kept as it was and the residual goes on with its own hold and fade, never zeroed in a frame (the !L.cracked line below is the asleep case)
+  const failed = L.digFail && !L.dugIn && !L.cracked && !L.dormant;
+  if (!failed && (L.dormant || !L.cracked)) { L.shedT = 0; L.shedP = 0; L.sandS = L.bury; L.stoodT = 0; return; }
+  if (!failed) {
+    L.shedT = (L.shedT || 0) + dt;
+    if (!L.hasStood) { L.shedP = shedCurve(L.shedT); L.sandS = 1; L.stoodT = 0; return; }
+  }
+  // stood: the shed runs out (a lab calm mid-rise jumps her to stood: eased, never snapped), then the residual's slow drift off
+  L.shedP = Math.min(1, Math.max(shedCurve(L.shedT), (L.shedP || 0) + dt / 0.6));
+  L.stoodT = (L.stoodT || 0) + dt;
+  const r = Math.min(1, Math.max(0, (L.stoodT - SHED.hold) / SHED.restT));
+  L.sandS = Math.min(L.sandS ?? 1, 1 - r * r * (3 - 2 * r));
+}
 // the crust's uniforms each frame (brooder.js updateBrooder): uniform writes only, never a program change
 export function crustTick(L) {
   const u = L.crustU;
   // (M6) uCrack and uCrackO lag the body one frame: crustTick runs where updateBrooder calls it, before this frame's poseAll has moved her
   // body (L.crackK is last frame's too), so the network trails her by a frame's rise (<= 8 u/s x 1/60 = 0.13 u, bar (d)); cosmetic
   u.uBury.value = L.bury; u.uCrack.value = L.crackK || 0;
+  // (sandrise) the shed (shedTick): the sand on her, its progress and the run (world units with driftWorld 1, see SHED); the crack drawn on the sand still on her,
+  // closing as the shed ends (L.crackK itself is unchanged: it falls with bury and is 0 at the stand)
+  const sp = L.shedP || 0, ss = L.buried ? (L.sandS ?? L.bury) : 0, sh = L.parts && L.parts.shell;
+  if (sp > 0 && sh) {
+    _shInv.copy(sh.matrixWorld).invert();
+    u.uDownO.value.set(0, -1, 0).transformDirection(_shInv);
+    u.uShed.value.set(ss, sp, SHED.run * sp * sp, u.uShed.value.w);
+    if (L.cracked) u.uCrack.value = Math.min(1, (L.crackT || 0) / BURY.crackT) * ss * (1 - smoothK(0.55, 1, sp));
+  } else u.uShed.value.set(ss, 0, 0, u.uShed.value.w);
+  // (sandrise) THE DRIFTS' SCALE: the cover's noise reads vCrO, her shell's OBJECT space, and the sculpted shell is drawn at x15.4 (L.R): at
+  // the shipped scale (driftWorld 0, uDriftS 1) its two octaves span her whole shell in under a cell, so the field is ~one value over her and
+  // the threshold left only the thin veil (sandpix-probe: asleep, the cover over 0.3 on 0 of ~26k up-facing pixels of her strip). driftWorld 1
+  // reads it at the world scale the look-dev comment describes (~2.5 u and ~0.7 u), so the drifts lie in patches with edges
+  u.uDriftS.value = CRUST.driftWorld > 0 && sh ? sh.matrixWorld.getMaxScaleOnAxis() : 1;
   // (Task 7b) the crack's network rides her: sampled where her body was at the crack (vCrW less how far she has risen since)
   if (L.crackK > 0 && L.crackO0) u.uCrackO.value.subVectors(L.body.position, L.crackO0); else u.uCrackO.value.set(0, 0, 0);
   u.uCrustK.value.set(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack); u.uCrustRough.value = CRUST.rough;
@@ -1241,6 +1339,7 @@ export function crustTick(L) {
 
 // ---- THE TELL ----
 const ease = x => x * x * (3 - 2 * x);
+function smoothK(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
 const TRICKLE_J = [-2, 0, 2];                         // the trickle's three bearings round the nearest one (module scratch, not a literal per breath)
 // THE TELL (spec §1): every 8-10 s the sand over her lifts a few centimetres and settles; a thin trickle of silt slides off the
 // crest's edge with each breath. Only a careful eye catches it: the lift is drawn only with the lens within BURY.breath.draw u of the strip's edge (a
@@ -1315,10 +1414,7 @@ export function* prepGrowthJ(L, MD) {
     // within GROW.near u of the seam, or in the corridor his eye looks down at it from the sand: out from the seam along its normal's level
     // part, 0 .. GROW.sight[0] u, within GROW.sight[1] u of that line (a sphere of 3 u buried 24 of her 32 fronds on the strip; 1.5 u alone
     // left the ones rooted 2-3 u off it in the line of sight). The strip's new fronds keep GROW.clear off it already
-    const WP = weed.geometry.attributes.position, Hs = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null, nr2 = GROW.near * GROW.near;
-    let snx = 0, snz = 0; if (Hs) { const hn = L.harpoon.normal, l = Math.hypot(hn.x, hn.z) || 1; snx = hn.x / l; snz = hn.z / l; }
-    const overIron = p => { if (!Hs) return false; const dx = p.x - Hs.x, dy = p.y - Hs.y, dz = p.z - Hs.z; if (dx * dx + dy * dy + dz * dz < nr2) return true;
-      const t = dx * snx + dz * snz; if (t < 0 || t > GROW.sight[0]) return false; const qx = dx - snx * t, qz = dz - snz * t; return qx * qx + dy * dy + qz * qz < GROW.sight[1] * GROW.sight[1]; };
+    const WP = weed.geometry.attributes.position, iron = ironTest(L), overIron = p => !!iron && iron(p.x, p.y, p.z);
     for (let k = 0; k < weed.count; k++) {
       if (dueNow()) yield;
       weed.getMatrixAt(k, _gm); _gm.premultiply(weed.matrixWorld);
@@ -1401,80 +1497,199 @@ export function growCover(L, b) {
     weed.instanceMatrix.needsUpdate = true;
   }
 }
-// THE GROWTH ON THE EXPOSED ROCK (Task 5b; Michael's checkpoint 2026-10-20: "keep the weeds maybe even add more and coral"). Laid at the
-// bed (bedDown: after the fit and the harpoon's seat, before prepGrowth), home only (only a buried build beds down). No new program: the
-// weed's spare slots (her weed InstancedMesh is built for 150 fronds and the sculpt keeps 60: the same mesh, the same material) and ONE
-// mesh of her own reef's parts (brooderGeo.js rockGrowthParts: fans, encrusting mats, coralline lumps, tube clumps) drawn in the reef's
-// own material object (the same program; the parts carry its uv). Every vertex of every frond and part on the strip (inStrip, as
-// prepGrowth keeps the reef's triangles), so nothing of it stands out of the dune; a part that strays is dropped. Clear of the harpoon's
-// seam by GROW.clear u (fronds hid the iron from 3 u: stills t5b-dev/g2-h3 .. g5, prepGrowth). Seeded per site; at most GROW.* of each (fewer where the strip has no room). Rebuilt at every bed (an event).
-//   weed     fronds added (the spare slots), in GROW.tufts clumps at the rock's foot and flanks (her shell 1-3.5 u over the mean ground:
-//            where sand lodges and weed roots), small (k 0.45-0.95: a frond 1.0-2.0 u)
-//   fan / crust / lump / tube   the coral: fans on her high points, mats on the faces that look up, lumps and tube clumps between
+// THE SEAM'S KEEP-OFF (prepGrowth's and growRock's one rule; burial-probe disguise `fronds` judges it): true for a world point within
+// GROW.near u of the harpoon's seam, or in the corridor his eye looks down at it from the sand (out from the seam along its normal's level
+// part, 0 .. GROW.sight[0] u, within GROW.sight[1] u of that line). null with no seated iron. (reefback: lifted out of prepGrowth so the
+// rock's coral keeps out of the corridor too; before, only its fronds did, and the coral kept GROW.clear's sphere alone)
+function ironTest(L) {
+  const Hs = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null;
+  if (!Hs) return null;
+  const hn = L.harpoon.normal, l = Math.hypot(hn.x, hn.z) || 1, snx = hn.x / l, snz = hn.z / l, nr2 = GROW.near * GROW.near, s0 = GROW.sight[0], s2 = GROW.sight[1] * GROW.sight[1];
+  return (x, y, z) => {
+    const dx = x - Hs.x, dy = y - Hs.y, dz = z - Hs.z; if (dx * dx + dy * dy + dz * dz < nr2) return true;
+    const t = dx * snx + dz * snz; if (t < 0 || t > s0) return false; const qx = dx - snx * t, qz = dz - snz * t; return qx * qx + dy * dy + qz * qz < s2;
+  };
+}
+// THE GROWTH ON THE EXPOSED ROCK (Task 5b; Michael's checkpoint 2026-10-20: "keep the weeds maybe even add more and coral"; reefback
+// 2026-10-31, asked whether it was right: "better but can be pushed more", then "grow more coral"). Laid at the bed (bedDown: after the fit
+// and the harpoon's seat, before prepGrowth), home only (only a buried build beds down). No new program: the weed's own InstancedMesh (the
+// same mesh, the same material; its instance buffer grown here to hold GROW.weed fronds past weedBase (the sculpt's 60: 210; the procedural build's 150: 300), the old buffer released
+// through the mesh's dispose event first) and ONE mesh of her own reef's parts (brooderGeo.js rockGrowthParts: fans, sponge mats,
+// coralline skins, lumps, tube clumps) drawn in the reef's own material object (the same program; the parts carry its uv). Every vertex of
+// every frond and part on the strip (inStrip, as prepGrowth keeps the reef's triangles), so nothing of it stands out of the dune; a part
+// that strays is dropped. Off the harpoon's seam by GROW.clear u AND out of the seam's sight corridor (ironTest), so the iron reads from the
+// sand. Seeded per site; at most GROW.* of each (fewer where the strip has no room). Rebuilt at every bed (an event); the dig-in does not
+// re-lay it (it rides her body).
+// THE REFERENCE (reefback; sources: the ex-HMAS Brisbane epibenthos study (USC research repository), a Florida wreck's fouling and flow
+// (MDPI Water 9(1):11), Paramuricea clavata fan orientation (VLIZ), Nantucket Shoals boulder scour and the MarLIN / JNCC scoured-rock
+// biotopes (coralline crusts on scoured boulders)): on an old wreck or boulder the fouling is set by EXPOSURE AND ORIENTATION:
+// heaviest where the flow first meets it and on the high, vertical and ridge faces (suspension feeders want laminar flow), weakest on the
+// sediment-laden horizontal surfaces and in sheltered hollows; sea fans stand with their face across the prevailing current; near the
+// sand line scour keeps the rock bare but for scour-proof crustose coralline and small stuff; growth comes in COLONIES (a mat with lumps
+// and buds on it, a fan on the ridge above), not an even scatter; algae in tufts from a holdfast in the cracks. So here:
+//   the current   from her open sand (L.sand) across her back toward the crack (the rift draws the water); in her body's frame `ux, uz`
+//   exposure      per spot of her top: height over the mean ground, facing up-current, ridge (convexity), less the scour band (within
+//                 GROW.scour u of the mean ground) and the flat tops where the sand lies (the crust shader's sand: keep it reading)
+//   colonies      GROW.colonies centres drawn by exposure (exp(GROW.ex x score)), GROW.space apart, each a dominant hue: sponge mats
+//                 on the gentler faces of it, coralline skins, lumps, tube clumps above the scour band, and a FAN at its highest ridge
+//                 spot when it is exposed, its plane across the current
+//   sprinkle      the rest of the rock: coralline flecks and small lumps drawn by a softer exposure (the scour band: coralline only)
+//   inset         every coral part's footprint GROW.inset u inside the strip: the dig-in does not re-lay it, and a bed off the first moves the
+//                 strip (burial-probe digin offbed)
+//   weed          GROW.tufts tufts of 7-12 fronds from one holdfast (splayed out from it, the middle ones tallest) in the flanks' hollows
+//                 and cracks (her shell 0.9-3.8 u over the mean ground: where sand lodges and weed roots), GROW.space apart
 // (Task 7b, M6) revealT s: the growth outside the strip uncovered from the crack over this long (growReveal); revRamp u: a frond grows from
 // its root over this much of the front; revPuff: a puff of silt every this many reef triangles uncovered
 // (Task 12) coverU: the bury over which the dig-in covers it (growCover): from 0.1 (the dune's first tenth up) to 0.7, before her flanks are
 // under it (the dune's rings draw at bury x their fitted height)
-export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
+export const GROW = { weed: 150, tufts: 15, colonies: 28, fan: 14, crust: 40, coralline: 80, lump: 70, tube: 22, sprinkle: 100, ex: 4.0, scour: 1.6, space: 0.10, inset: 0.8,
+  clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
-export function growRock(L, MD) {
+const cl01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const OC8 = Float64Array.from({ length: 8 }, (_, b) => Math.cos(b * Math.PI / 4)), OS8 = Float64Array.from({ length: 8 }, (_, b) => Math.sin(b * Math.PI / 4));
+// a colony's hue (brooderGeo RG_HUE): the greyed bone, olive, rose-grey and umber most, the ochre, rust and fan rose less (lantern-lit
+// at a few u the rust mats read as salmon cloth: after1-d8)
+const COL_HUE = [3, 3, 1, 1, 5, 5, 4, 0, 2, 6];
+// L.growMs: the ms this build's growth took, headless wall time (never a __gpu number); `add` books it onto the first pass's (a build whose
+// sculpt lands later grows twice), else it replaces it
+export function growRock(L, MD, add = false) {
+  const t0 = performance.now();
+  try { growRockAt(L, MD); } finally { L.growMs = (add && L.growMs || 0) + performance.now() - t0; }
+}
+function growRockAt(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
-  L.growN = { weed: 0, fan: 0, crust: 0, lump: 0, tube: 0 };
+  L.growN = { weed: 0, tufts: 0, colonies: 0, fan: 0, crust: 0, coralline: 0, lump: 0, tube: 0 };
   if (!weed || !reef || !top || !MD) return;
   // a re-bed on the same growth: the full growth back first (prepGrowth's own first step; done here, or its restore would write the last
   // bed's fronds over this one's), then prepGrowth finds it whole
   if (L.reefIdx && L.reefIdx.geo === reef.geometry) buryGrowth(L, false);
   if (L.weedBase == null) L.weedBase = weed.count;   // (the procedural build: every slot used; the sculpt sets its own, brooder.js)
-  const rnd = seededRand(0x5B6E0C + L.idx), mw = _gmw.fromArray(MD.mw), base = L.weedBase, cap = weed.instanceMatrix.count;
-  const H = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null, clr2 = GROW.clear * GROW.clear;
-  const offSeam = (x, y, z) => !H || (x - H.x) ** 2 + (y - H.y) ** 2 + (z - H.z) ** 2 > clr2;
-  // the candidates: her top on a 0.03 grid (0.46 u), on the strip and over the floor (the strip has no dune)
-  const C = [];
+  const rnd = seededRand(0x5B6E0C + L.idx), mw = _gmw.fromArray(MD.mw), base = L.weedBase, Rs = MD.R || L.R || 1;
+  const H = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null, clr2 = GROW.clear * GROW.clear, iron = ironTest(L);
+  const offSeam = (x, y, z) => (!H || (x - H.x) ** 2 + (y - H.y) ** 2 + (z - H.z) ** 2 > clr2) && !(iron && iron(x, y, z));
+  // the current's up-current direction in her body's frame (THE REFERENCE)
+  const sl = L.sand ? Math.hypot(L.sand.x, L.sand.z) : 0;
+  _gn.set(sl ? L.sand.x / sl : 1, 0, sl ? L.sand.z / sl : 0).transformDirection(_gm2.copy(mw).invert());
+  const ul = Math.hypot(_gn.x, _gn.z) || 1, ux = _gn.x / ul, uz = _gn.z / ul;
+  // the candidates: her top on a 0.03 grid (0.46 u), on the strip and over the floor (the strip has no dune), each with its exposure
+  const C = [], e = 0.02, rr = 0.06;
   for (let x = -1.3; x <= 1.3; x += 0.03) for (let z = -1.0; z <= 1.15; z += 0.03) {
     const h = top(x, z); if (h == null) continue;
     _gs.set(x, h, z).applyMatrix4(mw);
     if (!inStrip(MD, _gs.x, _gs.z) || _gs.y < terrainH(_gs.x, _gs.z, L.idx) + 0.3) continue;
-    const e = 0.02, hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
-    C.push({ x, z, h, wy: _gs.y, up: _gs.y - L.meanG, nx: -(hx - h) / e, nz: -(hz - h) / e });
+    const hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
+    const gx = (hx - h) / e, gz = (hz - h) / e, up = _gs.y - L.meanG;
+    const a1 = top(x + rr, z), a2 = top(x - rr, z), a3 = top(x, z + rr), a4 = top(x, z - rr);
+    const cv = a1 == null || a2 == null || a3 == null || a4 == null ? 0 : (h - (a1 + a2 + a3 + a4) / 4) * Rs;   // u; + a ridge, - a hollow
+    const face = Math.max(-1, Math.min(1, -gx * ux - gz * uz)), slope = Math.hypot(gx, gz), scour = cl01((GROW.scour - up) / 1.2);
+    const ex = 0.5 * cl01(up / 6.5) + 0.55 * Math.max(0, face) + 0.35 * Math.max(-1, Math.min(1, cv / 0.35)) - 0.7 * scour - 0.3 * (1 - cl01(slope / 0.25));
+    C.push({ x, z, h, wy: _gs.y, up, nx: -gx, nz: -gz, slope, cv, face, scour, ex });
   }
   if (!C.length) return;
-  const pick = f => { const s = C.filter(f); return s.length ? s[Math.floor(rnd() * s.length)] : null; };
-  // THE WEED: clumps at the rock's foot and flanks
-  const WP = weed.geometry.attributes.position, A = weed.instanceMatrix.array, want = Math.min(GROW.weed, cap - base);
+  // a weighted draw from a list of candidates (weight fn), optionally kept GROW.space off the ones taken
+  const draw = (list, wf, taken, space) => {
+    let tot = 0; const W = new Float64Array(list.length);
+    for (let i = 0; i < list.length; i++) { W[i] = wf(list[i]); tot += W[i]; }
+    for (let tries = 0; tries < 80 && tot > 0; tries++) {
+      let r = rnd() * tot, i = 0; while (i < list.length - 1 && r > W[i]) { r -= W[i]; i++; }
+      const c = list[i];
+      if (taken && taken.some(t => (t.x - c.x) ** 2 + (t.z - c.z) ** 2 < space * space)) continue;
+      return c;
+    }
+    return null;
+  };
+  // THE WEED: tufts in the flanks' hollows and cracks, each a holdfast with its fronds splayed out of it
+  const WP = weed.geometry.attributes.position, want = GROW.weed;
+  if (weed.instanceMatrix.count < base + want) {
+    const old = weed.instanceMatrix, na = new Float32Array((base + want) * 16);
+    na.set(old.array.subarray(0, Math.min(old.array.length, na.length)));
+    weed.dispose();   // (the renderer releases the old instance buffer on the mesh's dispose event: geometry and material are untouched)
+    weed.instanceMatrix = new THREE.InstancedBufferAttribute(na, 16); weed.instanceMatrix.setUsage(old.usage);
+  }
+  const A = weed.instanceMatrix.array, tufts = [], flank = C.filter(q => q.up > 0.9 && q.up < 3.8);
   let n = base;
   for (let t = 0; t < GROW.tufts && n < base + want; t++) {
-    const c = pick(q => q.up > 1.0 && q.up < 3.5); if (!c) break;
-    const per = Math.ceil(want / GROW.tufts);
+    const c = draw(flank, q => Math.exp(1.5 * cl01(-q.cv / 0.3) + 0.6 * cl01(q.slope)), tufts, GROW.space); if (!c) continue;
+    tufts.push(c);
+    const per = 7 + Math.floor(rnd() * 6), rad = 0.010 + 0.010 * rnd(), n0 = n;
     for (let k = 0, tries = 0; k < per && n < base + want && tries < per * 6; tries++) {
-      const x = c.x + (rnd() - 0.5) * 0.09, z = c.z + (rnd() - 0.5) * 0.09, h = top(x, z); if (h == null) continue;
-      const e = 0.02, hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
+      const a = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * rad, x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d, h = top(x, z); if (h == null) continue;
+      const hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
+      // splayed out from the holdfast: the shell's normal eased up, then leaned out along the frond's bearing from the tuft's middle
+      const lean = 0.25 + 0.55 * (d / rad);
       _gn.set(-(hx - h) / e, 1, -(hz - h) / e).normalize().lerp(_gu, 0.45).normalize();
+      _gn.x += Math.cos(a) * lean; _gn.z += Math.sin(a) * lean; _gn.normalize();
       _gq.setFromUnitVectors(_gu, _gn).multiply(_gq2.setFromAxisAngle(_gu, rnd() * Math.PI * 2));
-      const kk = 0.45 + 0.5 * rnd();
+      const kk = (0.55 + 0.5 * rnd()) * (1.15 - 0.4 * (d / rad));
       _gm2.compose(_gs.set(x, h - 0.003, z), _gq, _gn.set(kk, kk, kk));
-      // every vertex of it on the strip (prepGrowth's own rule, here at the source)
+      // every vertex of it on the strip and off the iron (prepGrowth's own rule, here at the source)
       let ok = true; const wm = _gm3.multiplyMatrices(mw, _gm2);
       for (let v = 0; v < WP.count && ok; v++) { _gs.fromBufferAttribute(WP, v).applyMatrix4(wm); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z); }
       if (!ok) continue;
       _gm2.toArray(A, n * 16); n++; k++;
     }
+    if (n > n0) L.growN.tufts++;
   }
   weed.count = n; weed.instanceMatrix.needsUpdate = true; weed.computeBoundingSphere();
   L.growN.weed = n - base;
-  // THE CORAL: spots by kind, then every part kept only if all of it lies on the strip and clear of the seam
-  const spots = [];
-  const put = (kind, nWant, f, size) => { for (let i = 0; i < nWant; i++) { const c = pick(f); if (c) spots.push([kind, c.x, c.z, size(), Math.floor(rnd() * 7)]); } };
-  put('fan', GROW.fan, q => q.up > 4.0, () => 0.07 + 0.05 * rnd());
-  put('crust', GROW.crust, q => q.nx * q.nx + q.nz * q.nz < 0.6, () => 0.04 + 0.05 * rnd());
-  put('lump', GROW.lump, () => true, () => 0.018 + 0.016 * rnd());
-  put('tube', GROW.tube, q => q.up > 2.0, () => 0.010 + 0.006 * rnd());
+  // THE CORAL: colonies by exposure, then the sprinkle; every part kept only if all of it lies on the strip and off the iron
+  const spots = [], cap = { fan: GROW.fan, crust: GROW.crust, coralline: GROW.coralline, lump: GROW.lump, tube: GROW.tube }, got = { fan: 0, crust: 0, coralline: 0, lump: 0, tube: 0 };
+  const add = (kind, c, size, hue, yaw) => { if (!c || got[kind] >= cap[kind]) return; got[kind]++; spots.push([kind, c.x, c.z, size, hue, yaw]); };
+  // a mat lies only where her top under it is near its own plane (crust() moulds a heightfield to topH: across a lip of her rock it hung
+  // down the face as a crumpled sheet, stills after1-d8 / -crest): her top at 0.55 and 1.1 of its radius, 8 bearings, off the plane of
+  // the centre's slope by under 0.45 of the radius
+  const lies = (q, r) => { for (let a = 0; a < 8; a++) { const ca = Math.cos(a * 0.7854), sa = Math.sin(a * 0.7854);
+    for (const f of [0.55, 1.1]) { const dx = ca * r * f, dz = sa * r * f, h = top(q.x + dx, q.z + dz); if (h == null || Math.abs(h - (q.h - q.nx * dx - q.nz * dz)) > 0.45 * r) return false; } } return true; };
+  const fanYaw = () => Math.atan2(ux, uz) + (rnd() - 0.5) * 0.5;   // its face to the current, give or take 15 deg
+  const cols = [];
+  for (let t = 0; t < GROW.colonies; t++) {
+    const c = draw(C, q => Math.exp(GROW.ex * q.ex), cols, GROW.space); if (!c) continue;
+    cols.push(c);
+    const rc = 0.045 + 0.045 * rnd(), hue = COL_HUE[Math.floor(rnd() * COL_HUE.length)], rich = cl01(0.5 + c.ex);
+    const near = C.filter(q => (q.x - c.x) ** 2 + (q.z - c.z) ** 2 < rc * rc);
+    // the middle of the colony first: a pick from the nearer of two
+    const pick = f => { const s = near.filter(f); if (!s.length) return null; const p = s[Math.floor(rnd() * s.length)], q = s[Math.floor(rnd() * s.length)];
+      return (p.x - c.x) ** 2 + (p.z - c.z) ** 2 < (q.x - c.x) ** 2 + (q.z - c.z) ** 2 ? p : q; };
+    const hueOf = () => rnd() < 0.7 ? hue : (hue + 1 + Math.floor(rnd() * 2)) % 7;
+    const nMat = 1 + (rnd() < rich ? 1 : 0) + (rnd() < 0.35 ? 1 : 0);
+    // (a mat that finds no spot it lies on tries once more at 0.65 of the size)
+    const mat = (kind, r, f, hu) => { for (const k of [1, 0.65]) { const q = pick(p => f(p) && lies(p, r * k)); if (q) return add(kind, q, r * k, hu); } };
+    for (let k = 0; k < nMat; k++) mat('crust', 0.035 + 0.04 * rnd(), q => q.slope < 0.9 && q.scour < 0.5, hueOf());
+    for (let k = 0, m = 2 + Math.floor(rnd() * 2); k < m; k++) mat('coralline', 0.022 + 0.026 * rnd(), q => q.slope < 1.4, Math.floor(rnd() * 4));
+    for (let k = 0, m = 2 + Math.floor(rnd() * 3 * (0.5 + rich)); k < m; k++) add('lump', pick(() => true), 0.014 + 0.018 * rnd(), hueOf());
+    // (the tube clumps on her high ridges the larger: they break her skyline from the sand)
+    if (c.up > GROW.scour) for (let k = 0, m = (rnd() < 0.6 ? 1 : 0) + (rnd() < 0.3 * rich ? 1 : 0); k < m; k++) { const q = pick(q => q.up > GROW.scour); if (q) add('tube', q, (0.011 + 0.009 * rnd()) * (1 + 0.35 * cl01((q.up - 3.5) / 2.5)), hueOf()); }
+    // the fan on the colony's ridge, where it is exposed: its highest convex spot
+    if (rnd() < 0.3 + 0.5 * Math.max(0, c.face) + (c.cv > 0.08 ? 0.3 : 0) && c.up > 2.5) {
+      let b = null; for (const q of near) if (q.up > 2.5 && (!b || q.cv + 0.15 * q.up > b.cv + 0.15 * b.up)) b = q;
+      add('fan', b, 0.10 + 0.09 * rnd(), Math.floor(rnd() * 3), fanYaw());
+    }
+  }
+  L.growN.colonies = cols.length;
+  // the ridge fans: her highest exposed ridges that no colony took, a fan apiece, across the current (they stand on her skyline)
+  const ridge = C.filter(q => q.up > 3.5 && q.cv > 0.05 && q.face > -0.2), fans = cols.slice();
+  for (let t = 0; t < GROW.fan && got.fan < cap.fan; t++) { const c = draw(ridge, q => Math.exp(3 * (q.cv / 0.3 + q.face)), fans, GROW.space * 1.2); if (!c) continue; fans.push(c); add('fan', c, 0.10 + 0.09 * rnd(), Math.floor(rnd() * 3), fanYaw()); }
+  // the sprinkle: the rest of the rock, coralline flecks and small lumps (in the scour band coralline only; a lump under 0.014 stood wholly
+  // under the shell, brooderGeo RG_SEAT)
+  for (let t = 0; t < GROW.sprinkle; t++) {
+    const c = draw(C, q => Math.exp(1.6 * q.ex)); if (!c) break;
+    const r = 0.016 + 0.022 * rnd();
+    if (c.scour > 0.5 || rnd() < 0.6) { if (lies(c, r)) add('coralline', c, r, Math.floor(rnd() * 4)); }
+    else add('lump', c, 0.014 + 0.010 * rnd(), Math.floor(rnd() * 7));
+  }
   G.setShellHeight(top);
   let parts;
   try { parts = G.rockGrowthParts(0xC0BA1 + L.idx, spots); } finally { G.setShellHeight(null); }
-  const keep = [];
+  // (reefback) and its footprint GROW.inset u inside the strip: the dig-in does not re-lay the growth, and a bed off the first one moves the
+  // strip (burial-probe digin offbed, 6.2 u off it: with the denser growth 1 coral vertex of 54683 fell outside the new bed's band). The
+  // footprint's outline: its outermost vertex on 8 bearings, each pushed GROW.inset u further out along that bearing
+  const keep = [], OX = new Float64Array(8), OZ = new Float64Array(8), OD = new Float64Array(8), ins = GROW.inset;
   for (let i = 0; i < parts.length; i++) {
     const P = parts[i].attributes.position; let ok = true;
-    for (let v = 0; v < P.count && ok; v++) { _gs.fromBufferAttribute(P, v).applyMatrix4(mw); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z); }
+    OD.fill(-Infinity);
+    for (let v = 0; v < P.count && ok; v++) { _gs.fromBufferAttribute(P, v).applyMatrix4(mw); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z);
+      for (let b = 0; b < 8; b++) { const d = _gs.x * OC8[b] + _gs.z * OS8[b]; if (d > OD[b]) { OD[b] = d; OX[b] = _gs.x; OZ[b] = _gs.z; } } }
+    for (let b = 0; b < 8 && ok; b++) ok = inStrip(MD, OX[b] + OC8[b] * ins, OZ[b] + OS8[b] * ins);
     if (ok) { keep.push(parts[i]); L.growN[spots[i][0]]++; } else parts[i].dispose();
   }
   let co = L.parts.coral;
@@ -1527,6 +1742,10 @@ if (typeof window !== 'undefined') window.__burial = {
   inStrip: (x, z) => { const L = liveV(); return inStrip(L && L.mound, x, z); },
   // THE CRUST's knobs (Task 5): a patch, no rebuild (updateBrooder writes them into the uniforms every frame)
   crust: CRUST,
+  // (sandrise) THE SHED's knobs (SHED: on 0 = the shipped cover, the sand going with bury: sandpix-probe's RED fade) and its live values;
+  // paint(on): the crust's probe paint (uShed.w), sandpix-probe only
+  shed: SHED, shedState: () => { const L = liveV(); return L ? { shedP: L.shedP || 0, sandS: L.sandS ?? null, shedT: L.shedT || 0, stoodT: L.stoodT || 0 } : null; },
+  paint(on, thr = 0.3) { const L = liveV(); if (L && L.crustU) L.crustU.uShed.value.w = on ? 1 + thr : 0; return !!(L && L.crustU); },
   // { look: 'sand' (the shipped default) | 'shell' | 'light' | 'stone' } sets that look's values (alb, nrm, rough, sand, and the sand cover's cover / drift / dust / flat; the three non-sand looks zero the cover keys); any other key patches its own value
   setCrust(p) { if (p.look && !CRUST_LOOKS[p.look]) throw new Error('setCrust: look is ' + Object.keys(CRUST_LOOKS).join(' | ')); Object.assign(CRUST, p.look ? CRUST_LOOKS[p.look] : null, p); return Object.assign({}, CRUST); }
 };
