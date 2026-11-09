@@ -2,7 +2,7 @@
 title: Velkath buried — a rock with a harpoon in it
 status: wip
 tags: brooder, sleepers, rite, particles, design
-updated: 2026-10-31
+updated: 2026-11-09
 ---
 Velkath sleeps buried at home as a sand-covered rock with an old harpoon in her; pulling it wakes her in a falling-sand plume. Merged 2026-10-26. Michael's look 2026-10-31: six of eight good; the claw's point still robotic, the growth on her back can be pushed more, and the sand cover and rise dust were lost (being fixed).
 
@@ -37,3 +37,4 @@ Velkath sleeps buried at home as a sand-covered rock with an old harpoon in her;
 - 2026-10-21 — final whole-branch review: ready to merge. One fix round (d56bb78, b5fefbc, 965fc39, 7fb7621; coral re-lay reverted in 0300542); re-review clean. Look questions 1-8 sent to Michael.
 - 2026-10-26 — merged to main at Michael's word ("merge it"), with START OVER on the title. Stays wip until his look questions 1-8 are answered.
 - 2026-10-31 — Michael answered the look questions: "1. looks good - but the claw still feels very robotic" (the point's aim is approved, its motion is not: branch clawpoint); "2. good" (the breath); "3. good" (RIDGE_LINE and its line); "4. better but can be pushed more" (the coral and weed on her rock; what "more" means is asked); "5. good" (the scar); "6. good" (the average player's extra hits); "7. good" (wards dark under the sand); "8. good" (the mouse-drop snap). And a regression: "we lost that she is partially covered in sand and when she rises the sand rolls off in a slight dust cloud" (branch sandfix, root cause being found).
+- 2026-11-09 — Michael: "do 1, 2 and 3" (3 = finish the claw point). Branch `clawpoint` is brought up to date with main (it conflicts in `brooder.js` with the sand rise), re-checked, and a new look video recorded. His calls on the point's feel and the brace step are still open.
