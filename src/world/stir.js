@@ -125,6 +125,11 @@ vec3 stirPush(vec3 wp, float flex){
 
 // ---- the tick ------------------------------------------------------------------------
 let lastT = -1, sonarPoll = 0, sonarAge = 99, lastFeetT = null, stepCool = 0;
+// (wakeswap) the sleeper's plant push: eased weight 0..1, and her last sphere (x y z r vx vy vz) held while it eases out
+// slpEase: seconds for the full 0 <-> 1 swing (0 = the shipped snap: the probe's RED)
+export const STIR = { slpEase: 1.0 };
+let slpE = 0;
+const slpLast = new Float32Array(7);
 const _ppos = new THREE.Vector3();
 
 // Called at the top of the frame by whichever of the owning modules runs first (flora);
@@ -176,9 +181,37 @@ export function tickStir(dt, t) {
   uJolt.value.set(jX, jZ, jSpeed > 0 ? Math.min(jReach, ja * jSpeed) : jReach,
     ja < 0 ? 0 : jK * (ja < 0.25 ? 1 : Math.max(0, 1 - (ja - 0.25) / 3.5)) * (jSpeed > 0 ? 1 : 0.8));
 
+  // (wakeswap) THE SLEEPER'S PUSH EASES. Her sphere is ~1.6 R (24.6 u at home, reach 1.9x = 47 u), and the slot
+  // above turns on in ONE frame at the wake (and off in one at the calm): every plant within ~47 u was thrown up to
+  // ~13 u sideways between two frames (and the flinchers within ~110 u withdrew), which read as the plants swapping.
+  // Her PLANT push now follows her out of the sand (1 - bury on a buried build: a body under the sand parts
+  // nothing) and swings at most 1 per STIR.slpEase seconds (the calm eases out from where she stood). Only the plants'
+  // sphere is eased: the mover slot (the fish, the flinch of schools) keeps the shipped instant fear.
+  {
+    const live = moverLive(M_SLEEPER);
+    let want = 0;
+    if (live) {
+      const o = M_SLEEPER * 9;
+      slpLast[0] = MV[o]; slpLast[1] = MV[o + 1]; slpLast[2] = MV[o + 2]; slpLast[3] = MV[o + 3];
+      slpLast[4] = MV[o + 4]; slpLast[5] = MV[o + 5]; slpLast[6] = MV[o + 6];
+      want = L && L.buried ? Math.min(1, Math.max(0, 1 - (L.bury || 0))) : 1;
+    }
+    if (STIR.slpEase > 0) { const m = dt / STIR.slpEase; slpE += Math.max(-m, Math.min(m, want - slpE)); }
+    else slpE = live ? 1 : 0;   // (slpEase 0 = the shipped snap, bury ignored: the probe's RED)
+    if (!live) slpLast[4] = slpLast[5] = slpLast[6] = 0;   // (easing out where she stood: no drag)
+  }
   // plant push spheres: the six live movers nearest the camera's subject (Sal)
   let k = 0;
   for (let s = 0; s < MOVER_N && k < PUSH_N; s++) {
+    if (s === M_SLEEPER) {
+      if (slpE <= 0 || slpLast[3] <= 0) continue;
+      const dx = slpLast[0] - player.pos.x, dz = slpLast[2] - player.pos.z;
+      if (dx * dx + dz * dz > 160 * 160) continue;
+      uPush.value[k].set(slpLast[0], slpLast[1], slpLast[2], slpLast[3] * slpE);
+      uPushV.value[k].set(slpLast[4] * slpE, slpLast[5] * slpE, slpLast[6] * slpE);
+      k++;
+      continue;
+    }
     if (!moverLive(s)) continue;
     const o = s * 9;
     const dx = MV[o] - player.pos.x, dz = MV[o + 2] - player.pos.z;
@@ -194,7 +227,7 @@ export function stirNow() { return now; }
 
 if (typeof window !== 'undefined') {
   window.__stir = {
-    MV, PU,
+    MV, PU, STIR, slp: () => ({ e: slpE, r: slpLast[3] }),
     pulse: (x, y, z, reach = 40, speed = 0, k = 1) => { stirPulse(x, y, z, reach, speed, k, P_STRIKE); return 'pulse'; },
     at: (x, y, z) => pulseAt(x, y, z),
     live: () => { const o = []; for (let s = 0; s < MOVER_N; s++) if (moverLive(s)) o.push(s); return o; }
