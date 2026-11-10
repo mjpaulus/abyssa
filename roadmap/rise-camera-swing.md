@@ -19,3 +19,4 @@ Acceptance: over the whole rise at home, the lens is never inside her body and n
 
 ## Log
 - 2026-11-09 — created. Michael: "do 1, 2 and 3" (1 = this fix). Branch `camswing`.
+- 2026-11-09 — swing built on `camswing` (df75d03), rise only (in the fight it lost his helmet from frame). The diagnosed mechanism is real and fixed where it bites: Sal 2 u off her edge with his back to her, lens inside her 34 frames -> 2-3, drop misses 53 -> 2. The 2026-11-01 clip did not reproduce on today's main with the same inputs; it depends on where he ends up standing. Two older 1-4 frame cases remain (a leg unfolding through a close lens; the lens crossing her shell rim at a long boom). New probe `riseclip-probe.mjs`. Honest look: the swung view tucks low beside him with her leg filling a third of the frame and his helmet cropped; not clearly better than main. Videos in `~/sc/.abyssa-wt/video/camswing/`. Not merged; Michael to judge.

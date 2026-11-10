@@ -15,3 +15,4 @@ Acceptance: the cause is named with evidence; a probe catches the swap and fails
 
 ## Log
 - 2026-11-09 — created. Michael: "do 1, 2 and 3" (2 = this). Branch `wakeswap`.
+- 2026-11-09 — cause found: the plants never changed. Her plant push (`stir.js` `tickStir`, a 24.6 u sphere reaching about 47 u) switched on at full size the frame after she woke, while still buried, and off in one frame at the calm. 75c487f has it too. Fixed on `wakeswap` (76a110e, fa40cc5): the push eases in as she leaves the sand and out at the calm (`STIR.slpEase` 1 s). Largest one-frame push 8.05 u -> 0.13 u (wake), 0.37 u (calm). Probe `wakeswap-probe.mjs <wake|calm>`, fails on main. Load checks pass. Only Velkath at home was probed. Open for Michael: the standing push size (`STIR.slpScale`: A today's, B 0.6, C none; stills in `~/sc/.abyssa-wt/video/wakeswap/`). Not merged.
