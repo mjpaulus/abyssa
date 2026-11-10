@@ -1259,12 +1259,21 @@ const credPiv = p => Math.hypot(p.x - player.pos.x, p.y - player.pos.y - DECK_PI
 //     helmet instead; failing that it travels from where it is toward the drop's spot (`travel` u/s), never pushed into
 //     her. A contact, as SALCAP's: its velocity toward him is bled, the rest kept (it slides round him on the spring).
 //     creKeepMax: its largest move in a frame; nearN / nearMin: frames it ended nearer his helmet than minD, the least.
+//   THE SWING (camswing 2026-11-09, Michael: "do 1"; the drop, rule 1, when it misses): straight behind him is in her (she rises
+//     beside him, her legs and shell across the boom) and the floor rule refuses the lower spots, so the drop found nothing, the
+//     guard fell back to main's and held the lens in her (tools/bench/riseclip-probe.mjs e2_0_b: 27 frames, dropMiss 55, guardMain
+//     11, out by a 0.7 u pop). Then creSpot is tried on bearings turned `swing` deg round him, then 2 x swing, each side (the side
+//     whose bearing points away from her first; the side found last frame first of all, kept until the drop lets go), at dropR
+//     then minD, over `swingClr` (0.6, the guard's own floor). A found spot is the drop's (creDropOff, so the guard's drop-spot
+//     answer has it too), slid toward at `travel` u/s, never jumped to. swing 0 = this rule off: not one statement of it runs.
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2, ahead: 2,
-  drop: 1, dropR: 2.8, dropClr: 1.2, dropW: 10, dropWOut: 4, dropHold: 0.5, travel: 12, guardTravel: 30 };
+  drop: 1, dropR: 2.8, dropClr: 1.2, dropW: 10, dropWOut: 4, dropHold: 0.5, travel: 12, guardTravel: 30, swing: 30, swingClr: 0.6 };
 let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
 let creDrop = 0, creDropV = 0, creDropT = 0, creDropHT = 0, creEng = 0;
 let creNearN = 0, creNearMin = 9, creDropN = 0, creDropMiss = 0, crePunchN = 0, creGuardN = 0, creGuardArc = 0, creGuardOff = 0, creGuardTgt = 0, creGuardMain = 0, creKeepN = 0, creKeepArc = 0, creKeepSph = 0, creKeepMax = 0, creKeepFail = 0;
 const creDropOff = V3(), _arcS = V3(), _arcP = V3(), _lfA = V3(), _lfB = V3();
+let creSwingA = 0, creSwingN = 0, creSwingMiss = 0, creSwingSlid = 0, creGuardSw = 0;   // (camswing) the swing's held angle (rad, 0 = none) and its books
+const _swOff = V3();
 // (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
 // helmet is against the eggs and every rise runs into them, so the lens goes level or low
 // behind him instead (never under the floor's clearance)
@@ -1304,6 +1313,37 @@ function creSpot(from, bx, bz, h, m, clr, zi) {
     const x = from.x + _arcS.x, y = from.y + _arcS.y, z = from.z + _arcS.z;
     if (y < shutFloorY(x, z, zi) + clr) return false;   // (the next ones are lower, over the same ground)
     if (creBoomClear(from, _arcS, m) >= 1) { _arcP.set(x, y, z); return true; }
+  }
+  return false;
+}
+// (camswing) THE SWING's spots: the drop's bearing (bx, bz) turned round him by the held angle, then +-swing, then +-2 swing (the side
+// pointing away from her first), creSpot at dropR then minD over swingClr. Writes _arcP like creSpot and holds the angle in creSwingA.
+function creSwingTry(a, bx, bz, zi) {
+  const c = Math.cos(a), s = Math.sin(a), rx = bx * c + bz * s, rz = bz * c - bx * s;
+  if (creSpot(_piv, rx, rz, CRECAM.dropR, CRECAM.margin, CRECAM.swingClr, zi) || creSpot(_piv, rx, rz, CRECAM.minD, CRECAM.margin, CRECAM.swingClr, zi)) { creSwingA = a; return true; }
+  return false;
+}
+// (camswing) the guard's: one radius h, margin m, floor clr, turned +-swing then +-2 swing from (bx, bz), away from her first (_arcP)
+function creTurnSpot(bx, bz, h, m, clr, zi) {
+  const a1 = CRECAM.swing * Math.PI / 180;
+  let sg = 1;
+  if (lev && lev.pos) { const ox = _piv.x - lev.pos.x, oz = _piv.z - lev.pos.z; sg = (bz * ox - bx * oz) >= 0 ? 1 : -1; }
+  for (let k = 1; k <= 2; k++) for (let j = 0; j < 2; j++) {
+    const a = (j ? -sg : sg) * a1 * k, c = Math.cos(a), s = Math.sin(a);
+    if (creSpot(_piv, bx * c + bz * s, bz * c - bx * s, h, m, clr, zi)) return true;
+  }
+  return false;
+}
+function creSwing(bx, bz, zi) {
+  const a1 = CRECAM.swing * Math.PI / 180;
+  if (creSwingA !== 0 && creSwingTry(creSwingA, bx, bz, zi)) return true;
+  // the side whose turned bearing points away from her centre: the sign of the cross of the bearing with the way out from her
+  let sg = 1;
+  if (lev && lev.pos) { const ox = _piv.x - lev.pos.x, oz = _piv.z - lev.pos.z; sg = (bz * ox - bx * oz) >= 0 ? 1 : -1; }
+  for (let k = 1; k <= 2; k++) {
+    const a = a1 * k;
+    if (sg * a !== creSwingA && creSwingTry(sg * a, bx, bz, zi)) return true;
+    if (-sg * a !== creSwingA && creSwingTry(-sg * a, bx, bz, zi)) return true;
   }
   return false;
 }
@@ -1780,7 +1820,7 @@ window.__risecam = { knobs: RISECAM, state: () => ({ beh: rcBeh, k: +rcK.toFixed
   yawDeg: +(rcYaw * 57.29578).toFixed(2), pitchDeg: +(rcPitch * 57.29578).toFixed(2), aimYawDeg: +(rcDy * 57.29578).toFixed(3), aimPitchDeg: +(rcDp * 57.29578).toFixed(3), qPre: _rcQ.clone(),
   aim: _rcA.toArray(), lookNetDeg: rcOpen ? +((Math.abs(player.yaw - rcY0) + Math.abs(player.pitch - rcP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(rcPath * 57.29578).toFixed(2), recentDeg: +(rcRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),
-  drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardTgt: creGuardTgt, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4) }) };
+  drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardTgt: creGuardTgt, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4), swingN: creSwingN, swingMiss: creSwingMiss, swingSlid: creSwingSlid, guardSw: creGuardSw, swingDeg: +(creSwingA * 180 / Math.PI).toFixed(1) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -2262,11 +2302,22 @@ function updateCamera(dt, t, fwd) {
           const hl = Math.hypot(camBack.x, camBack.z);
           const bx = hl > 1e-4 ? camBack.x / hl : -Math.sin(player.yaw), bz = hl > 1e-4 ? camBack.z / hl : -Math.cos(player.yaw);
           if (creSpot(_piv, bx, bz, CRECAM.dropR, CRECAM.margin, CRECAM.dropClr, zi) || creSpot(_piv, bx, bz, CRECAM.minD, CRECAM.margin, CRECAM.dropClr, zi)) {
-            creDropOff.copy(_arcP).sub(player.pos); creDropT = 1; creDropHT = 0;
-          } else creDropMiss++;   // (no spot: the last one holds, or the boom's minD as before)
-        } else if (creDropT > 0) { creDropHT += dt; if (creDropHT > CRECAM.dropHold || inCrack || throatOn) creDropT = 0; }
+            if (creSwingA !== 0) {   // (camswing) back from a swung spot to the straight one: slid, as the swing's own moves
+              creSwingA = 0; _swOff.copy(_arcP).sub(player.pos);
+              if (creDrop > 0) { const d = _swOff.distanceTo(creDropOff), lim = CRECAM.travel * dt; if (d > lim) { creDropOff.lerp(_swOff, lim / d); creSwingSlid++; } else creDropOff.copy(_swOff); }
+              else creDropOff.copy(_swOff);
+            } else creDropOff.copy(_arcP).sub(player.pos);
+            creDropT = 1; creDropHT = 0;
+          } else if (CRECAM.swing > 0 && creSwing(bx, bz, zi)) {
+            // (camswing) THE SWING: a spot turned round him; slid toward at `travel` u/s while the drop is already drawn in
+            _swOff.copy(_arcP).sub(player.pos);
+            if (creDrop > 0) { const d = _swOff.distanceTo(creDropOff), lim = CRECAM.travel * dt; if (d > lim) { creDropOff.lerp(_swOff, lim / d); creSwingSlid++; } else creDropOff.copy(_swOff); }
+            else creDropOff.copy(_swOff);
+            creDropT = 1; creDropHT = 0; creSwingN++;
+          } else { creDropMiss++; if (CRECAM.swing > 0) creSwingMiss++; }   // (no spot: the last one holds, or the boom's minD as before)
+        } else if (creDropT > 0) { creDropHT += dt; if (creDropHT > CRECAM.dropHold || inCrack || throatOn) { creDropT = 0; creSwingA = 0; } }
       }
-    } else { creLiftT = 0; creHold = 1e9; creHoldT = 0; creDropT = 0; }
+    } else { creLiftT = 0; creHold = 1e9; creHoldT = 0; creDropT = 0; creSwingA = 0; }
     if (CRECAM.drop && (creDropT > 0 || creDrop > 0 || creDropV !== 0)) {
       const wd = creDropT > creDrop ? CRECAM.dropW : CRECAM.dropWOut;
       creDropV += (wd * wd * (creDropT - creDrop) - 2 * wd * creDropV) * h; creDrop += creDropV * h;
@@ -2656,7 +2707,9 @@ function updateCamera(dt, t, fwd) {
         const bx = hl > 1e-4 ? camTo.x / hl : -Math.sin(player.yaw), bz = hl > 1e-4 ? camTo.z / hl : -Math.cos(player.yaw);
         // (a spot can be most of a half-circle round him: from outside her (the look-ahead after the calm) the lens
         // travels there at most `travel` u/s; from inside her it goes at the guard's own rate, as main's)
-        if (creSpot(_piv, bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardArc++; } else {
+        if (creSpot(_piv, bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardArc++; }
+        // (camswing) THE SWING for the guard: the same spot turned round him (+-swing, +-2 swing, away from her first)
+        else if (CRECAM.swing > 0 && creTurnSpot(bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardSw++; } else {
           // else the drop's spot while the drop holds the target, else the frame's own target (camDesired: the boom as
           // it tested clear, the drop blended in), if clear of her and off his body
           _lfB.copy(player.pos).add(creDropOff);

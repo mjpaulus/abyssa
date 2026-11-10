@@ -80,8 +80,8 @@ const INSTALL = `(async () => {
       R.prev = [cp.x, cp.y, cp.z, pp.x, pp.y, pp.z, ang];
       const st = window.__crecam.state(), dbg = window.__crecam.dbg, shk = window.__hh.impulse(0);
       R.S.push({ i: R.S.length, in: inside ? 1 : 0, why, in15: in15 ? 1 : 0, dp: r4(dp), rel: r4(rel), raw: r4(raw), dAng: r4(dAng), k: st.k, eng: st.eng, drop: st.drop, dropT: st.dropT,
-        dropMiss: st.dropMiss, guardN: st.guardN, guardMain: st.guardMain, keepN: st.keepN, keepFail: st.keepFail, hold: st.hold, cd: st.camDist, rawB: r4(dbg.raw),
-        swingN: st.swingN == null ? null : st.swingN, cam: [r4(cp.x), r4(cp.y), r4(cp.z)], sal: [r4(pp.x), r4(pp.y), r4(pp.z)], dL: r4(Math.hypot(pp.x - L.pos.x, pp.z - L.pos.z)),
+        dropMiss: st.dropMiss, guardN: st.guardN, guardMain: st.guardMain, keepN: st.keepN, keepFail: st.keepFail, hold: st.hold, cd: st.camDist, rawB: r4(dbg.raw), dT: r4(dbg.tgt), dS: r4(dbg.spring), dG: r4(dbg.guard), dF: r4(dbg.final), lift: st.lift,
+        swingN: st.swingN == null ? null : st.swingN, guardSw: st.guardSw == null ? null : st.guardSw, swingDeg: st.swingDeg == null ? null : st.swingDeg, cam: [r4(cp.x), r4(cp.y), r4(cp.z)], sal: [r4(pp.x), r4(pp.y), r4(pp.z)], dL: r4(Math.hypot(pp.x - L.pos.x, pp.z - L.pos.z)),
         shake: r4(shk), dormant: L.dormant ? 1 : 0, bury: r4(L.bury || 0), stood: L.hasStood ? 1 : 0 });
       if (${TRACE}) { const q = camera.quaternion; R.T.push([cp.x, cp.y, cp.z, q.x, q.y, q.z, q.w]); }
     },
