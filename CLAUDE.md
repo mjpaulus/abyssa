@@ -502,14 +502,16 @@ against explicit contracts and reviewed on return.
   first next frame and let go only when the drop lets go), at dropR then minD, over `swingClr` 0.6 (the guard's own floor). The
   found spot is the drop's (`creDropOff`, so the guard's drop-spot answer has it too), slid toward at `travel` u/s, never jumped to;
   back to a straight spot the same. THE GUARD gets the same turn (`creTurnSpot`: minD, margin 0.3, floor 0.6) after its own straight
-  spot misses. `swing: 0` = the lensfix lens: every new statement is behind `CRECAM.swing > 0` or `creSwingA !== 0` (never set at 0);
+  spot misses, turned from straight BEHIND him (camBack's bearing; turned from the lens's own bearing it walked round to his front frame
+  on frame and he left the picture for ~0.3 s). `swing: 0` = the lensfix lens: every new statement is behind `CRECAM.swing > 0` or `creSwingA !== 0` (never set at 0);
   traces of main and of swing 0 on the plugged, seeded probe differ by p95 0.014-0.057 u / max 0.03-0.10 u on unshaken frames, inside
   the A/A floor of one build (p95 0.019-0.156, max 0.03-0.44: the stepped game is NOT bit-reproducible across loads, see the probe),
   with identical dropMiss counts. `state()` books swingN / swingMiss / swingSlid / guardSw / swingDeg. Probe `tools/bench/riseclip-probe.mjs
   <case|all>` (plugged clock, Math.random seeded and re-seeded per frame, clock started at 500, the sculpt waited for without
   stepping; cases take (rise2-rec A's inputs), walk (discover-rec's), a0/a90/am90/a180 (the anchor at four headings), off, and
   e<d>_<b>_<f|b|s|l> stand-offs off her strip edge; `CP_SWING=0` = main's lens, the RED): inside her by her own colliders (margin 0),
-  in15, the one-frame lens move relative to him (bar 0.5 u, the shake's frames booked apart), dropMiss, the close hold. Swing 0 ->
+  in15, the one-frame lens move relative to him (bar 0.5 u, the shake's frames booked apart), his helmet out of the drawn frame (`salOut`;
+  main has it at the anchor too, 37-72 frames, swing 30 23-45), dropMiss, the close hold. Swing 0 ->
   30 (n = 1 each, rendered): e2_0_b inside 34 -> 2 frames, dropMiss 53 -> 2, guardMain to 0; e2_0.5_b 15 -> 4; the anchor stands
   dropMiss 34-43 -> 0. NOT 0, two classes the swing does not reach (main has both): a leg unfolding through a lens at minD in
   one frame (parts 34 / 16, 2-4 frames; the guard's way out is capped at guardTravel 30 u/s, so fewer frames means a bigger jump),

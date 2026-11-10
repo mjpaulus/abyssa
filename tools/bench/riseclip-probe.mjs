@@ -19,6 +19,7 @@
 // the turn of its bearing about his pivot in that frame (`dAng`, deg), and __crecam's books (eng bits, drop, dropMiss, guard / keep counts).
 // BARS (each case):
 //   inside   0 frames with the lens inside her (bodyBlocked margin 0)
+//   framed   (added after the first after-video: a swung lens left him out of the picture) his helmet in the drawn frame on every frame
 //   jump     the largest one-frame lens move relative to him <= JUMP u (CP_JUMP, default 0.5). Why 0.5: the lens's own rules travel at most
 //            CRECAM.guardTravel 30 u/s = 0.5 u a frame at 60 fps (the guard escaping her; travel 12 u/s = 0.2); the pop on main was 1.3 u in a
 //            frame (2.6x that). At 2.2-4 u from his helmet 0.5 u is a 7-13 deg swing of the view about him in 1/60 s, which the eye follows as
@@ -61,7 +62,8 @@ if (process.env.CP_SEED !== '0') await c.send('Page.addScriptToEvaluateOnNewDocu
 
 // the frame hook: everything booked page-side, read back once
 const INSTALL = `(async () => {
-  const BC = await import('/src/entities/sleeper/bodyCols.js'), { camera } = await import('/src/core.js');
+  const BC = await import('/src/entities/sleeper/bodyCols.js'), { camera } = await import('/src/core.js'), THREE = await import('three');
+  const hv = new THREE.Vector3();
   const L = window.lev; if (!L || L.kind !== 'brooder' || !L.buried) return { err: 'no buried brooder' };
   window.__crecamDbg = true;
   const D = 180 / Math.PI, r4 = v => Math.round(v * 1e4) / 1e4;
@@ -79,10 +81,13 @@ const INSTALL = `(async () => {
         let a = ang - q[6]; while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; dAng = Math.abs(a) * D; }
       R.prev = [cp.x, cp.y, cp.z, pp.x, pp.y, pp.z, ang];
       const st = window.__crecam.state(), dbg = window.__crecam.dbg, shk = window.__hh.impulse(0);
+      // his helmet (the pivot) in the drawn frame: NDC, and out of frame (behind the lens or |x| / |y| > 1)
+      camera.updateMatrixWorld(); hv.set(px, py, pz).applyMatrix4(camera.matrixWorldInverse); const front = hv.z < 0; hv.applyMatrix4(camera.projectionMatrix);
+      const salOut = !front || Math.abs(hv.x) > 1 || Math.abs(hv.y) > 1;
       R.S.push({ i: R.S.length, in: inside ? 1 : 0, why, in15: in15 ? 1 : 0, dp: r4(dp), rel: r4(rel), raw: r4(raw), dAng: r4(dAng), k: st.k, eng: st.eng, drop: st.drop, dropT: st.dropT,
         dropMiss: st.dropMiss, guardN: st.guardN, guardMain: st.guardMain, keepN: st.keepN, keepFail: st.keepFail, hold: st.hold, cd: st.camDist, rawB: r4(dbg.raw), dT: r4(dbg.tgt), dS: r4(dbg.spring), dG: r4(dbg.guard), dF: r4(dbg.final), lift: st.lift,
         swingN: st.swingN == null ? null : st.swingN, guardSw: st.guardSw == null ? null : st.guardSw, swingDeg: st.swingDeg == null ? null : st.swingDeg, cam: [r4(cp.x), r4(cp.y), r4(cp.z)], sal: [r4(pp.x), r4(pp.y), r4(pp.z)], dL: r4(Math.hypot(pp.x - L.pos.x, pp.z - L.pos.z)),
-        shake: r4(shk), dormant: L.dormant ? 1 : 0, bury: r4(L.bury || 0), stood: L.hasStood ? 1 : 0 });
+        shake: r4(shk), salOut: salOut ? 1 : 0, ndc: [r4(hv.x), r4(hv.y)], dormant: L.dormant ? 1 : 0, bury: r4(L.bury || 0), stood: L.hasStood ? 1 : 0 });
       if (${TRACE}) { const q = camera.quaternion; R.T.push([cp.x, cp.y, cp.z, q.x, q.y, q.z, q.w]); }
     },
     // (Math.random re-seeded from the frame number before every booked frame: other consumers (audio, particles, async callbacks between
@@ -247,13 +252,15 @@ try {
       closeAfterStood: (() => { const a = win.filter(r => r.stood); return a.length ? { n: a.length, dpLt27: a.filter(r => r.dp < 2.7).length, minDp: Math.min(...a.map(r => r.dp)) } : null; })() };
     // the hold after her rise: frames from the wake to the stand + 2 s where the lens is held within 2.7 u of his helmet
     ses.summary.close27 = win.filter(r => r.i >= wakeF && r.dp < 2.7).length;
+    ses.summary.salOut = win.filter(r => r.salOut).length;   // frames his helmet is out of the drawn frame (a lens swung round to his front)
     ses.rows = win.map(r => ({ ...r, t: +((r.i - wakeF) / 60).toFixed(3), v: vt(r.i) }));
     out.sessions[cs] = ses;
     const s = ses.summary;
-    const okIn = s.inside === 0, okJ = s.maxRel <= JUMP;
-    out.bars[cs] = { inside: okIn, jump: okJ };
-    console.log(`${cs}: ${okIn ? 'ok  ' : 'FAIL'} inside ${s.inside} frames (in15 ${s.in15}) runs ${JSON.stringify(s.insideRuns)} parts ${JSON.stringify(s.whyParts)} | ${okJ ? 'ok  ' : 'FAIL'} jump rel max ${s.maxRel} u at +${s.maxRelAtS} s${s.maxRelVideo != null ? ' (video ' + s.maxRelVideo + ' s)' : ''} (bar ${JUMP}; shaken frames apart: ${s.shakenN}, their max ${s.maxRelShaken}); raw ${s.maxRaw}, bearing ${s.maxDAng.toFixed(2)} deg; minDp ${s.minDp}; dropMiss ${s.dropMiss}; swingN ${s.swingN}; close27 ${s.close27}${ses.stand ? ' stand ' + JSON.stringify(ses.stand) : ''}`);
-    if (!okIn || !okJ) anyFail = true;
+    const okIn = s.inside === 0, okJ = s.maxRel <= JUMP, okF = s.salOut === 0;
+    out.bars[cs] = { inside: okIn, jump: okJ, framed: okF };
+    console.log(`${cs}: ${okIn ? 'ok  ' : 'FAIL'} inside ${s.inside} frames (in15 ${s.in15}) runs ${JSON.stringify(s.insideRuns)} parts ${JSON.stringify(s.whyParts)} | ${okJ ? 'ok  ' : 'FAIL'} jump rel max ${s.maxRel} u at +${s.maxRelAtS} s${s.maxRelVideo != null ? ' (video ' + s.maxRelVideo + ' s)' : ''} (bar ${JUMP}; shaken frames apart: ${s.shakenN}, their max ${s.maxRelShaken}); raw ${s.maxRaw}, bearing ${s.maxDAng.toFixed(2)} deg; minDp ${s.minDp}; dropMiss ${s.dropMiss}; swingN ${s.swingN}; close27 ${s.close27}; salOut ${s.salOut}${ses.stand ? ' stand ' + JSON.stringify(ses.stand) : ''}`);
+    if (!okF) console.log(`${cs}: FAIL framed: his helmet out of the drawn frame on ${s.salOut} frames`);
+    if (!okIn || !okJ || !okF) anyFail = true;
     if (!win.some(r => r.stood)) { console.log(`${cs}: she never stood in the window (UNMEASURED)`); anyVoid = true; }
   }
 } catch (e) { console.log('UNMEASURED: ' + (e && e.stack || e)); c.close(); process.exit(2); }

@@ -1324,9 +1324,11 @@ function creSwingTry(a, bx, bz, zi) {
   if (creSpot(_piv, rx, rz, CRECAM.dropR, CRECAM.margin, CRECAM.swingClr, zi) || creSpot(_piv, rx, rz, CRECAM.minD, CRECAM.margin, CRECAM.swingClr, zi)) { creSwingA = a; return true; }
   return false;
 }
-// (camswing) the guard's: one radius h, margin m, floor clr, turned +-swing then +-2 swing from (bx, bz), away from her first (_arcP)
-function creTurnSpot(bx, bz, h, m, clr, zi) {
-  const a1 = CRECAM.swing * Math.PI / 180;
+// (camswing) the guard's: one radius h, margin m, floor clr, turned +-swing then +-2 swing from the horizontal bearing (bx0, bz0) (the
+// boom's: straight behind him), away from her first (_arcP)
+function creTurnSpot(bx0, bz0, h, m, clr, zi) {
+  const a1 = CRECAM.swing * Math.PI / 180, hl = Math.hypot(bx0, bz0);
+  const bx = hl > 1e-4 ? bx0 / hl : -Math.sin(player.yaw), bz = hl > 1e-4 ? bz0 / hl : -Math.cos(player.yaw);
   let sg = 1;
   if (lev && lev.pos) { const ox = _piv.x - lev.pos.x, oz = _piv.z - lev.pos.z; sg = (bz * ox - bx * oz) >= 0 ? 1 : -1; }
   for (let k = 1; k <= 2; k++) for (let j = 0; j < 2; j++) {
@@ -2714,7 +2716,9 @@ function updateCamera(dt, t, fwd) {
         // travels there at most `travel` u/s; from inside her it goes at the guard's own rate, as main's)
         if (creSpot(_piv, bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardArc++; }
         // (camswing) THE SWING for the guard: the same spot turned round him (+-swing, +-2 swing, away from her first)
-        else if (creSwingOn() && creTurnSpot(bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardSw++; } else {
+        // (turned from straight BEHIND him, camBack's bearing, never from the lens's own: turned from where it already was, frame on frame
+        // it walked round to his front, his back to the lens's view, and he left the frame for ~0.3 s; riseclip e2_0_b's take)
+        else if (creSwingOn() && creTurnSpot(camBack.x, camBack.z, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardSw++; } else {
           // else the drop's spot while the drop holds the target, else the frame's own target (camDesired: the boom as
           // it tested clear, the drop blended in), if clear of her and off his body
           _lfB.copy(player.pos).add(creDropOff);
