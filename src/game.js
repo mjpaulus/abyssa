@@ -1265,7 +1265,8 @@ const credPiv = p => Math.hypot(p.x - player.pos.x, p.y - player.pos.y - DECK_PI
 //     11, out by a 0.7 u pop). Then creSpot is tried on bearings turned `swing` deg round him, then 2 x swing, each side (the side
 //     whose bearing points away from her first; the side found last frame first of all, kept until the drop lets go), at dropR
 //     then minD, over `swingClr` (0.6, the guard's own floor). A found spot is the drop's (creDropOff, so the guard's drop-spot
-//     answer has it too), slid toward at `travel` u/s, never jumped to. swing 0 = this rule off: not one statement of it runs.
+//     answer has it too), slid toward at `travel` u/s, never jumped to. The guard gets the same turn (creTurnSpot). Her RISE only
+//     (creSwingOn, below). swing 0 = this rule off: not one statement of it runs.
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2, ahead: 2,
   drop: 1, dropR: 2.8, dropClr: 1.2, dropW: 10, dropWOut: 4, dropHold: 0.5, travel: 12, guardTravel: 30, swing: 30, swingClr: 0.6 };
 let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
@@ -1334,6 +1335,10 @@ function creTurnSpot(bx, bz, h, m, clr, zi) {
   }
   return false;
 }
+// (camswing) the swing is HER RISE's only (home, buried, woken, until she stands: !L.risenUp, burial.js's rising guard): in the fight
+// it fired where her claw came down beside him and moved the lens CLAWCAM tips up from (clawcam-probe at 30 u: his bonnet left the
+// frame on 73-81 of 319 frames; main 0). The fight's claws-closing case stays main's, Michael's call.
+const creSwingOn = () => CRECAM.swing > 0 && !!lev && lev.risenUp === false && !lev.dormant;
 function creSwing(bx, bz, zi) {
   const a1 = CRECAM.swing * Math.PI / 180;
   if (creSwingA !== 0 && creSwingTry(creSwingA, bx, bz, zi)) return true;
@@ -2308,13 +2313,13 @@ function updateCamera(dt, t, fwd) {
               else creDropOff.copy(_swOff);
             } else creDropOff.copy(_arcP).sub(player.pos);
             creDropT = 1; creDropHT = 0;
-          } else if (CRECAM.swing > 0 && creSwing(bx, bz, zi)) {
+          } else if (creSwingOn() && creSwing(bx, bz, zi)) {
             // (camswing) THE SWING: a spot turned round him; slid toward at `travel` u/s while the drop is already drawn in
             _swOff.copy(_arcP).sub(player.pos);
             if (creDrop > 0) { const d = _swOff.distanceTo(creDropOff), lim = CRECAM.travel * dt; if (d > lim) { creDropOff.lerp(_swOff, lim / d); creSwingSlid++; } else creDropOff.copy(_swOff); }
             else creDropOff.copy(_swOff);
             creDropT = 1; creDropHT = 0; creSwingN++;
-          } else { creDropMiss++; if (CRECAM.swing > 0) creSwingMiss++; }   // (no spot: the last one holds, or the boom's minD as before)
+          } else { creDropMiss++; if (creSwingOn()) creSwingMiss++; }   // (no spot: the last one holds, or the boom's minD as before)
         } else if (creDropT > 0) { creDropHT += dt; if (creDropHT > CRECAM.dropHold || inCrack || throatOn) { creDropT = 0; creSwingA = 0; } }
       }
     } else { creLiftT = 0; creHold = 1e9; creHoldT = 0; creDropT = 0; creSwingA = 0; }
@@ -2709,7 +2714,7 @@ function updateCamera(dt, t, fwd) {
         // travels there at most `travel` u/s; from inside her it goes at the guard's own rate, as main's)
         if (creSpot(_piv, bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardArc++; }
         // (camswing) THE SWING for the guard: the same spot turned round him (+-swing, +-2 swing, away from her first)
-        else if (CRECAM.swing > 0 && creTurnSpot(bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardSw++; } else {
+        else if (creSwingOn() && creTurnSpot(bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardSw++; } else {
           // else the drop's spot while the drop holds the target, else the frame's own target (camDesired: the boom as
           // it tested clear, the drop blended in), if clear of her and off his body
           _lfB.copy(player.pos).add(creDropOff);

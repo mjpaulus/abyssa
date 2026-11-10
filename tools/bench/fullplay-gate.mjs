@@ -551,6 +551,8 @@ ledger.slamLog = await c.ev(`window.__slamLog || null`);
 // (velfix) the quality ladder as the run ended: the real loop's perf judge runs before the stepped loop takes over, and a
 // loaded machine (several of these at once) can shed passes, which changes the render the fight's colliders read back
 ledger.perf = await c.ev(`window.__perf ? window.__perf.state() : null`);
+// (camswing) the creature lens's own books at the end of the run (drop / swing / guard / keep counts, keepMax, nearN)
+ledger.cre = await c.ev(`window.__crecam ? (({ body, ...o }) => o)(window.__crecam.state()) : null`);
 console.log('LEDGER', JSON.stringify(ledger));
 let gateRed = false;
 if (GATE) {

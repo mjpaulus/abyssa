@@ -493,7 +493,29 @@ against explicit contracts and reviewed on return.
   after the calm in one resettle run; calm shell / leg 14 / 2 / 1 in three of the twelve (the rest 0). NOT 0: when she
   settles or re-rises with her claws closing round him there is no clear spot below his helmet, and the lens is then
   either nearer him than minD or in her (main's resettle baseline, 5 runs: calm shell / leg 13 / 0 / 4 / 18 / 2, PRESSED
-  14 / 20 / 3 / 28 / 5). A sideways swing round him (or a claw-proxy change) is the next call, Michael's. The gate stays
+  14 / 20 / 3 / 28 / 5). THE SWING (camswing 2026-11-09, branch camswing, card roadmap/rise-camera-swing.md; Michael chose the
+  sideways swing, "do 1"): rule 1 extended, HER RISE ONLY (`creSwingOn`: home, buried, woken, until she stands, `L.risenUp === false`;
+  let loose in the fight it fired where her claw came down beside him and moved the lens CLAWCAM tips up from, clawcam-probe's bonnet at
+  30 u 238-246 / 319 against main's 319, so the fight's claws-closing case stays main's and Michael's). When the drop finds no spot (straight behind him is in her: she rises beside him; the
+  floor rule `dropClr` 1.2 refuses the lower spots), `creSwing` tries creSpot on the drop's bearing turned round him by `CRECAM.swing`
+  30 deg, then 60, each side (the side whose bearing points AWAY from her centre first; the angle found is HELD, `creSwingA`, tried
+  first next frame and let go only when the drop lets go), at dropR then minD, over `swingClr` 0.6 (the guard's own floor). The
+  found spot is the drop's (`creDropOff`, so the guard's drop-spot answer has it too), slid toward at `travel` u/s, never jumped to;
+  back to a straight spot the same. THE GUARD gets the same turn (`creTurnSpot`: minD, margin 0.3, floor 0.6) after its own straight
+  spot misses. `swing: 0` = the lensfix lens: every new statement is behind `CRECAM.swing > 0` or `creSwingA !== 0` (never set at 0);
+  traces of main and of swing 0 on the plugged, seeded probe differ by p95 0.014-0.057 u / max 0.03-0.10 u on unshaken frames, inside
+  the A/A floor of one build (p95 0.019-0.156, max 0.03-0.44: the stepped game is NOT bit-reproducible across loads, see the probe),
+  with identical dropMiss counts. `state()` books swingN / swingMiss / swingSlid / guardSw / swingDeg. Probe `tools/bench/riseclip-probe.mjs
+  <case|all>` (plugged clock, Math.random seeded and re-seeded per frame, clock started at 500, the sculpt waited for without
+  stepping; cases take (rise2-rec A's inputs), walk (discover-rec's), a0/a90/am90/a180 (the anchor at four headings), off, and
+  e<d>_<b>_<f|b|s|l> stand-offs off her strip edge; `CP_SWING=0` = main's lens, the RED): inside her by her own colliders (margin 0),
+  in15, the one-frame lens move relative to him (bar 0.5 u, the shake's frames booked apart), dropMiss, the close hold. Swing 0 ->
+  30 (n = 1 each, rendered): e2_0_b inside 34 -> 2 frames, dropMiss 53 -> 2, guardMain to 0; e2_0.5_b 15 -> 4; the anchor stands
+  dropMiss 34-43 -> 0. NOT 0, two classes the swing does not reach (main has both): a leg unfolding through a lens at minD in
+  one frame (parts 34 / 16, 2-4 frames; the guard's way out is capped at guardTravel 30 u/s, so fewer frames means a bigger jump),
+  and a lens drawn by main's guard or the spring across the rim of her rising shell or a leg at a long boom (part -1 / 38 / 32,
+  1-2 frames, 0.6-1.1 u steps; e4_0_b and `off` never swing). The hold (CRECAM.hold 1.2 s at ~2.2-2.7 u with the line clear) is
+  untouched: identical frame counts swing 0 / 30. The gate stays
   RED on FLASH (the light-up's ring, B, not picked) and on CLEAN, which rose because the same light-up-tail frames moved
   from 1.1 u (PRESSED) to 2.2 u (CLEAN). Its after-calm lens-surface frames at a full 9 u boom are claw-proxy
   under-coverage (main has them). riteplay A/B (on 2f4eac9): the average bot's fights ran longer with the new lens in 12 of 16 pairs
