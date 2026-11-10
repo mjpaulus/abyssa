@@ -127,7 +127,8 @@ vec3 stirPush(vec3 wp, float flex){
 let lastT = -1, sonarPoll = 0, sonarAge = 99, lastFeetT = null, stepCool = 0;
 // (wakeswap) the sleeper's plant push: eased weight 0..1, and her last sphere (x y z r vx vy vz) held while it eases out
 // slpEase: seconds for the full 0 <-> 1 swing (0 = the shipped snap: the probe's RED)
-export const STIR = { slpEase: 1.0 };
+// slpScale: her plant sphere's size against the mover's (1 = shipped, 1.6 R); a look knob for Michael's call, not changed here
+export const STIR = { slpEase: 1.0, slpScale: 1 };
 let slpE = 0;
 const slpLast = new Float32Array(7);
 const _ppos = new THREE.Vector3();
@@ -207,7 +208,7 @@ export function tickStir(dt, t) {
       if (slpE <= 0 || slpLast[3] <= 0) continue;
       const dx = slpLast[0] - player.pos.x, dz = slpLast[2] - player.pos.z;
       if (dx * dx + dz * dz > 160 * 160) continue;
-      uPush.value[k].set(slpLast[0], slpLast[1], slpLast[2], slpLast[3] * slpE);
+      uPush.value[k].set(slpLast[0], slpLast[1], slpLast[2], slpLast[3] * slpE * STIR.slpScale);
       uPushV.value[k].set(slpLast[4] * slpE, slpLast[5] * slpE, slpLast[6] * slpE);
       k++;
       continue;

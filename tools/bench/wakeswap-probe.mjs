@@ -10,20 +10,22 @@
 // Exit 0 pass | 3 a bar failed | 2 UNMEASURED (no wake / no plants) | 4 LOST (clock drift) | 1 the run failed.
 // The take is vd-tools/rise2-rec.mjs mode B: a fresh profile, the plugged clock, the observer lens pinned (window.__camPin) 36 u off
 // her centre at (98, 3), 5 u up, looking at (98, 39); he walks to the anchor with a REAL W and pulls with a REAL E (the real input path).
-//   wake  every frame from the E to WAKE + 30 frames is stepped and rendered; booked from WAKE - 3 to WAKE + 30.
+//   wake  every frame from the E to her STOOD + 30 frames is stepped and rendered; booked from WAKE - 3 to STOOD + 30 (the whole
+//         rise: the plants' push follows her out of the sand, so the bars hold for every frame of it, not only the wake's).
 //   calm  as wake, then stepped until L.hasStood, __lev.cmd('calm') (the lab verb), booked from 3 frames before the first calmed
 //         frame to 30 after.
 // For every instance the plant kit shows (vis != 0) within NEAR 60 u (horizontal) of her centre, its TIP is the instance origin plus
 // its matrix's up column (the plant's own height axis), and its flex is taken as 1 (the push's largest share: tips). Per frame:
 //   disp  = sum over the live push spheres of stirPush(tip) except Sal's (his sphere moves with his own walk and the shove; booked
 //           apart as dispSal), in world units;  flinch = the FLINCH term's push share (1 - smoothstep(2w, 4.5w, d)) at the origin.
-// Bars (pre-registered before the fix was run; main measured: jump 3.9 u, flinch jump 1.0 on the frame her sphere appeared):
-//   jump    the largest one-frame change of |disp| over the near instances < 0.5 u
+// Bars (pre-registered before the fix was run). Measured on main ac66c07 and on 75c487f alike: jump 8.05 u (a seagrass 25.8 u off
+// her, 0 -> 8.05 u in one frame), flinch jump 1.0, on the frame after L.dormant fell; the calm (WS_RED=snap) the same in reverse (8.05 -> 0).
+//   jump    the largest one-frame change of the disp vector over the near instances < 0.5 u
 //   flinch  the largest one-frame change of flinch < 0.25
 //   same    the plant kit's instance hash (matrices, vis, lod, variant, host matrices) is identical over the window (a rebuild or a
 //           LOD pop would show here; booked, a bar)
-// Booked, not barred: the pinned lens's changed pixels frame to frame (> 60 codes summed RGB) over the window and their peak over
-// the median (main: 299k against ~143k: 2.1x), from screenshots WS_PIX=1 (slow; default on in wake).
+// Booked, not barred: the pinned lens's changed pixels frame to frame (> 60 codes summed RGB) from the E to WAKE + 30 and their peak
+// over the median (main: 299,779 against 143,211: 2.09x; fixed 1.10x), from screenshots WS_PIX=1 (slow; default on in wake).
 // WS_RED=snap  window.__stir.STIR.slpEase = 0 (the shipped snap): jump AND flinch must fail (exit 5 = the RED failed as it must,
 //              3 = it did not). Unfixed main has no STIR: run it plain, it must exit 3.
 // JSON -> WS_OUT (default out/probe/wakeswap-<mode>[-red].json under the cwd).
@@ -123,7 +125,7 @@ await c.ev(`(async () => {
     }
     const sl = S.uPush.value.filter(s => s.w > 0 && s.w !== 1.25).map(s => +s.w.toFixed(2));
     return { n, hash: h.toString(16), jump: +jump.toFixed(3), jumpSal: +jumpSal.toFixed(3), flinchJump: +fj.toFixed(3), maxDisp: +maxD.toFixed(2), worst,
-      dormant: !!L.dormant, calmed: !!L.calmed, bury: +(L.bury || 0).toFixed(3), spheres: sl, slp: window.__stir.slp ? window.__stir.slp() : null };
+      dormant: !!L.dormant, calmed: !!L.calmed, stood: !!L.hasStood, bury: +(L.bury || 0).toFixed(3), spheres: sl, slp: window.__stir.slp ? window.__stir.slp() : null };
   } };
   return 1; })()`);
 
@@ -165,7 +167,7 @@ console.log('E at game frame ' + gf);
 
 // the window: a ring of the last 3 snaps before the event, then 30 after
 const rows = [];
-let ring = [], ev = -1;
+let ring = [], ev = -1, stoodN = 0;
 const evExpr = MODE === 'wake' ? `!window.lev.dormant` : `!!window.lev.calmed`;
 if (MODE === 'calm') {
   let k = 0; while (!(await c.ev(`!!window.lev.hasStood`)) && k++ < 1200) await c.ev(`(window.__helm = true, window.__bench.step(10), 1)`);
@@ -174,12 +176,12 @@ if (MODE === 'calm') {
   await c.ev(`(window.__lev.cmd('calm'), 1)`);
 }
 await c.ev(`(window.__wsp.reset(), 1)`);
-for (let f = 0; f < 60 * 12; f++) {
+for (let f = 0; f < 60 * 20; f++) {
   const s = await c.ev(`window.__wsp.snap()`); s.gf = gf;
   if (ev < 0 && await c.ev(evExpr)) { ev = gf; console.log(MODE + ' at game frame ' + gf); }
   s.k = ev < 0 ? null : gf - ev;
   if (ev < 0) { ring.push(s); if (ring.length > 3) ring.shift(); if (PIX && ring.length) await shot(); }
-  else { if (rows.length === 0) rows.push(...ring); rows.push(s); if (PIX) await shot(); if (gf - ev >= 30) break; }
+  else { if (rows.length === 0) rows.push(...ring); rows.push(s); if (PIX && gf - ev <= 30) await shot(); if (gf - ev >= 30 && (MODE === 'calm' || (s.stood && ++stoodN > 30))) break; }
   await frame();
 }
 const clock = await drift(c);
