@@ -512,7 +512,7 @@ against explicit contracts and reviewed on return.
   e<d>_<b>_<f|b|s|l> stand-offs off her strip edge; `CP_SWING=0` = main's lens, the RED): inside her by her own colliders (margin 0),
   in15, the one-frame lens move relative to him (bar 0.5 u, the shake's frames booked apart), his helmet out of the drawn frame (`salOut`;
   main has it at the anchor too, 37-72 frames, swing 30 23-45), dropMiss, the close hold. Swing 0 ->
-  30 (n = 1 each, rendered): e2_0_b inside 34 -> 2 frames, dropMiss 53 -> 2, guardMain to 0; e2_0.5_b 15 -> 4; the anchor stands
+  30 (n = 1 each, rendered): e2_0_b inside 34 -> 2-3 frames, dropMiss 53 -> 2, guardMain to 0; e2_0.5_b 15 -> 3-4; the anchor stands
   dropMiss 34-43 -> 0. NOT 0, two classes the swing does not reach (main has both): a leg unfolding through a lens at minD in
   one frame (parts 34 / 16, 2-4 frames; the guard's way out is capped at guardTravel 30 u/s, so fewer frames means a bigger jump),
   and a lens drawn by main's guard or the spring across the rim of her rising shell or a leg at a long boom (part -1 / 38 / 32,
