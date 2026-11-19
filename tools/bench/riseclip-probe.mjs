@@ -24,9 +24,10 @@
 //            CRECAM.guardTravel 30 u/s = 0.5 u a frame at 60 fps (the guard escaping her; travel 12 u/s = 0.2); the pop on main was 1.3 u in a
 //            frame (2.6x that). At 2.2-4 u from his helmet 0.5 u is a 7-13 deg swing of the view about him in 1/60 s, which the eye follows as
 //            a fast move (a 30 fps video shows two such frames as one ~1 u step); past it, on main, is the snap that reads as a cut.
-// Exit 0 pass | 1 a bar failed | 2 UNMEASURED | 4 LOST. CP_SWING=<deg> sets __crecam.knobs.swing before E (0 = main's lens: the RED).
-// CP_KNOBS='<json>' merges into __risecrane.knobs before E (look-dev). CP_TRACE=1 books the lens at full precision (x, y, z and the quaternion, every frame of the window) for the swing-0 vs main compare.
-// JSON -> CP_OUT (default out/probe/riseclip-<case>-<tag>.json). ENV: DRV_PORT, CP_SWING, CP_JUMP, CP_TRACE, CP_TAG, CP_OUT, CP_RENDER (0 = no
+// Exit 0 pass | 1 a bar failed | 2 UNMEASURED | 4 LOST. CP_CRANE=0|1 sets __risecrane.knobs.on before E (0 = main's lens: the RED).
+// CP_LOOK=<deg> (stand cases): a look of that many degrees of yaw, written as player.js's mouse handler writes it, at the wake + CP_LOOKAT s (0.5).
+// CP_KNOBS='<json>' merges into __risecrane.knobs before E (look-dev). CP_TRACE=1 books the lens at full precision (x, y, z and the quaternion, every frame of the window) for a crane-off vs main compare.
+// JSON -> CP_OUT (default out/probe/riseclip-<case>-<tag>.json). ENV: DRV_PORT, CP_CRANE, CP_KNOBS, CP_LOOK, CP_LOOKAT, CP_JUMP, CP_TRACE, CP_TAG, CP_OUT, CP_RENDER (0 = no
 // render in the hands-off cases; default 1).
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 8794, 8840, 9419].includes(P)) { console.error('riseclip-probe: set DRV_PORT to a port of its own'); process.exit(2); }
@@ -230,6 +231,8 @@ async function runStand(ses, cs) {
   }
   for (let k = 0; k < 60; k++) { await ev(`window.__cpR.step(10, ${RENDER})`); if (await ev(`window.__cpR.wakeF >= 0`)) break; }
   const wakeF = await ev(`window.__cpR.wakeF`); if (wakeF < 0) throw new Error('she did not wake');
+  if (process.env.CP_LOOK) { const at = Math.round(60 * +(process.env.CP_LOOKAT || 0.5)), n0 = await ev(`window.__cpR.S.length`); const k = wakeF + at - n0; if (k > 0) await ev(`window.__cpR.step(${k}, ${RENDER})`);
+    ses.look = await ev(`(window.player.yaw += ${+process.env.CP_LOOK * Math.PI / 180}, window.__cpR.S.length)`); }
   for (;;) {
     await ev(`window.__cpR.step(20, ${RENDER})`);
     const [n, sf] = await ev(`[window.__cpR.S.length, window.__cpR.stoodF]`);
