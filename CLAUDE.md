@@ -565,7 +565,12 @@ against explicit contracts and reviewed on return.
   PLACE to the opening crack (riftPos(0) at the lip height, `aimPoint`) at the pre-registered `POINT.turn` 0.5 rad/s, and only once
   she FACES it (`POINT.face` 10 deg, `faceMax` 14 s so a blocked turn cannot stall her) does her major claw (claws[1], her left, body
   +X) rise, hold ~3 s through the line "A RIFT OPENS BELOW." and lower; then she walks home (Michael 2026-10-21, "1": finish turning,
-  then point). Not a blow: calmed, her contacts only push him aside. POINTCAM (game.js `POINTCAM`, `__pointcam`) is the lens: see the
+  then point). HOW the claw gets there is `brooderPoint.js` `REACH` (branch clawpoint; Michael approved the look from video): the shoulder
+  leads, the elbow and wrist unfold behind it, the load sags and is hitched, a 7.3 Hz tremor, the finger's own beat, her body rears
+  and lists; closed-form in the point's clock, zero by the lower's last frame. The hold keeps `REACH.drift` (0.4) of her idle claw
+  drift (poseClaws `dz`/`dy`) but NOT the footfall's term (`kick`, the `L.bY.v` share of `lag`): bY.v is a spring velocity a footfall
+  sets in one frame, and on the held claw it jerked the tip ~1.7 u in a frame (102-107 u/s). `clawpoint-book.mjs` books the claw tip
+  (the palm's most distal vertex) and bars the hold's peak one-frame tip speed at 22 u/s (main's own point 11.7-16.4). Not a blow: calmed, her contacts only push him aside. POINTCAM (game.js `POINTCAM`, `__pointcam`) is the lens: see the
   camera bullet. THE DIG-IN (brooder.js `onHerDune`, `beginDig` / `digStep`, `BURY.digT` 17.5 s): once he has been off her DUNE
   `SETTLE.hold` s the refit runs as a JOB over frames (burial.js `fitMoundJ` / `fitFootingJ` / `prepGrowthJ` generators, `BURY.job` 0.8 ms a
   slice; `bedDown` runs the same generators to the end and builds the same bed, hash-checked; a throw inside a slice abandons the job, its
