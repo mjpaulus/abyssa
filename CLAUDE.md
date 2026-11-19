@@ -1201,6 +1201,9 @@ session, cross-load ABBA); DRS (pace) holds 1.5x in every standard view under a 
   variants; every term gated by a shared uniform. `abyssaPath.w` = specular-AA gain.
 - `world/stir.js` is the shared disturbance bus (movers + startle pulses) every animal and
   plant reads; game.js pushes sleeper blows into it with `stirPulse`.
+  The sleeper's PLANT push eases in as she leaves the sand and out at the calm (`STIR.slpEase` 1 s), and her plant
+  sphere is `STIR.slpScale` 0.6 of the mover's (Michael 2026-11-19, option B). Probe: `tools/bench/wakeswap-probe.mjs
+  <wake|calm> <port>`; `WS_RED=snap` is its RED.
 - `world/particulate.js` (bokeh, plankton, spray) and the lamp in-scatter in water.js's fog
   chunk (`syncLamps()` after updateLighting) belong to the atmosphere.
 - Sleepers publish `ev.quake` (camera shake). Sal takes `diverImpulse`/`diverGrab`/
