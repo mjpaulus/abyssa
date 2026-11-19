@@ -1477,7 +1477,9 @@ function poseClaws(L, dt) {
     // secondary motion: the heavy claws lag the shell's bob and pitch (they rise as it
     // drops onto a footfall, dip as it rears), the crusher more than the cutter
     const lagK = c.major ? 1.3 : 0.8;
-    const lag = (0.6 * L.bP.x - 0.3 * L.bY.v / L.R) * lagK * st;
+    // (clawpoint, the hold's jolt) the footfall's share on its own: bY.v is a spring VELOCITY that a footfall sets in one frame
+    // (L.bY.v -= R * 0.10 ...), so this term steps; the point's hold keeps the rest of the drift (dz - kick) and not this
+    const lag = (0.6 * L.bP.x - 0.3 * L.bY.v / L.R) * lagK * st, kick = -0.3 * L.bY.v / L.R * lagK * st;
     const dz = (0.035 * nz(t * 0.37 * kM, sd * 3) + 0.012 * nz(t * 1.9 * kM, sd * 7)) * st + lag;
     const dy = 0.03 * nz(t * 0.29 * kM, sd * 5 + 1) * st;
     const gape = (0.5 + 0.5 * nz(t * 0.23 * kM, sd * 11)) * st;
@@ -1509,8 +1511,9 @@ function poseClaws(L, dt) {
           c.dj.rotation.z += (PT_DJ - c.dj.rotation.z) * k; c.djShip += (PT_DJ - c.djShip) * k;
         } else {
           // (clawpoint, brooderPoint.js) the shoulder leads on pointK, the elbow and the wrist unfold behind it and refold behind it on
-          // the lower; the load sags and is hitched, a fine tremor, some of her idle drift kept; the finger has its own beat
-          r.z += o.rz + o.drift * dz; r.y += o.ry + o.drift * dy;
+          // the lower; the load sags and is hitched, a fine tremor, some of her idle drift kept (not the footfall's kick: a heavy step
+          // jerked the held claw, 0.7-0.9 u at the palm in one frame); the finger has its own beat
+          r.z += o.rz + o.drift * (dz - kick); r.y += o.ry + o.drift * dy;
           tuckJoint(c.cj, PT_CJ, 0, sd, o.kE); tuckJoint(c.pj, PT_PJ, 0, sd, o.kW);
           c.cj.rotation.y -= sd * o.ey; c.cj.rotation.z += o.ez; c.pj.rotation.z += o.wz;
           const f = c.dj.rotation.z + (o.f - c.dj.rotation.z) * o.kF;
