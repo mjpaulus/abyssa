@@ -1795,16 +1795,16 @@ window.__risecam = { knobs: RISECAM, state: () => ({ beh: rcBeh, k: +rcK.toFixed
 //     u/s) to the first of `alts` that is clear of her (`m` u, and of her limbs `ahead` frames on) and of the world (clearCamDistance, the boom's
 //     own rock / prop / wreck / floor test); no candidate is tried per frame unless the last one is blocked, so it never hunts.
 //   - when: from the crack (L.cracked: the wake) while she rises (!hasStood), at home only (L.buried), awake, not calmed; `need` latched at the
-//     crack from his distance to her centre (1 at near[0] x R, 0 at near[1] x R: 23 / 31 u); it never re-engages in the same rise. The hand-back
+//     crack from his distance to her centre (1 at near[0] x R, 0 at near[1] x R: 20 / 24.6 u; bench z0b, 30 u, is 0); it never re-engages in the same rise. The hand-back
 //     starts when she has stood and takes tOut s, so k is exactly 0 by stood + tOut: before her hunt's first blow can cock. Off the open crack,
 //     the deck and the throat.
 //   - the mouse owns the view: a real look (RISECAM's 5 deg net / 15 deg path from the crack) or a pause hands back at once (on the tOut ramp)
 //     and it stays off for the rest of the rise.
 // on: 0 = today's lens bit for bit (every statement below is behind k > 0 or the window; k never leaves 0). `__risecrane.state()`.
-const RISECRANE = { on: 1, near: [1.5, 2.0], cone: 25, dR: 0.7, hR: 0.28, aimAhead: 6, aimUp: 1.6, tIn: 1.6, tOut: 1.8, maxT: 9, threat: 0.3, m: 0.6, ahead: 6,
+const RISECRANE = { on: 1, near: [1.3, 1.6], cone: 25, dR: 0.7, hR: 0.28, aimAhead: 6, aimUp: 1.6, tIn: 1.6, tOut: 1.8, maxT: 9, threat: 0.3, m: 0.6, ahead: 6,
   kelpR: 2.6, kelpLine: 1.6, slide: 5, alts: [[0, 0, 0], [0, 2, 0], [0, 0, 25], [0, 0, -25], [0, 2, 25], [0, 2, -25], [0, 0, 45], [0, 0, -45], [-2, 2, 0], [-4, 4, 0], [-2, 2, 45], [-2, 2, -45]],
   lookNet: 5, lookPath: 15, lookTau: 0.3 };
-let rkK = 0, rkFrom = 0, rkTo = 0, rkU = 1, rkDur = 1, rkNeed = 0, rkSide = 0, rkOpen = false, rkOff = false, rkY0 = 0, rkP0 = 0, rkPath = 0, rkRecent = 0;
+let rkK = 0, rkFrom = 0, rkTo = 0, rkU = 1, rkDur = 1, rkNeed = 0, rkSide = 0, rkOpen = false, rkOff = false, rkDone = false, rkY0 = 0, rkP0 = 0, rkPath = 0, rkRecent = 0;
 let rkYawWas = 0, rkPitchWas = 0, rkD = 0, rkH = 0, rkDb = 0, rkT = 0, rkKelpN = 0, rkAlt = 0, rkB = 0, rkRot = 0, rkWhy = '', rkN = 0, rkNStood = 0, rkNThreat = 0, rkBlockN = 0, rkWorldN = 0, rkSlideMax = 0;
 const _rkS = V3(), _rkDir = V3();
 // is (x, y, z) within r (u, in plan) of a kelp stalk of zone zi, at or under its crown? (flora.js kelp.data: the stalks' feet and heights;
@@ -1838,10 +1838,12 @@ function riseCraneFrame(dt, zi, inCrack) {
   rkYawWas = player.yaw; rkPitchWas = player.pitch;
   rkRecent = rkRecent * Math.exp(-Math.min(dt, 0.1) / C.lookTau) + dl;
   const her = !!(L && L.kind === 'brooder' && L.buried && L.body && L.pos);
-  if (!her || L.dormant || !L.cracked) { rkOpen = false; rkOff = false; rkNeed = 0; rkSide = 0; rkT = 0; }
+  if (!her || L.dormant || !L.cracked) { rkOpen = false; rkOff = false; rkDone = false; rkNeed = 0; rkSide = 0; rkT = 0; }
   // the window: her rise, from the crack until she stands; never past maxT s from the crack, nor with her threat up (in play her threat is
   // held at 0 until she stands: BURY.holdRise; a lab hold or a rise that never finishes cannot keep the crane over a fight)
-  const win = her && !L.dormant && !L.calmed && !!L.cracked && !L.hasStood && rkT < C.maxT && !((L.threatE || 0) > C.threat);
+  // (one move a rise: once the window has closed it stays closed until she is asleep again, rkDone)
+  const win = her && !rkDone && !L.dormant && !L.calmed && !!L.cracked && !L.hasStood && rkT < C.maxT && !((L.threatE || 0) > C.threat);
+  if (rkOpen && !win) rkDone = true;
   if (!C.on || (!win && rkK === 0 && rkTo === 0)) { rkWhy = !C.on ? 'off' : 'none'; if (!her) { rkK = rkFrom = rkTo = 0; rkU = 1; } return; }
   const R = L.R || 10, P = player.pos;
   const ax = P.x - L.pos.x, az = P.z - L.pos.z, bAway = Math.atan2(az, ax);
