@@ -127,8 +127,8 @@ vec3 stirPush(vec3 wp, float flex){
 let lastT = -1, sonarPoll = 0, sonarAge = 99, lastFeetT = null, stepCool = 0;
 // (wakeswap) the sleeper's plant push: eased weight 0..1, and her last sphere (x y z r vx vy vz) held while it eases out
 // slpEase: seconds for the full 0 <-> 1 swing (0 = the shipped snap: the probe's RED)
-// slpScale: her plant sphere's size against the mover's (1 = shipped, 1.6 R); a look knob for Michael's call, not changed here
-export const STIR = { slpEase: 1.0, slpScale: 1 };
+// slpScale: her plant sphere's size against the mover's (the old size was 1 = 1.6 R). SHIPPED 0.6 by Michael's call of 2026-11-19 (B of the A/B/C stills)
+export const STIR = { slpEase: 1.0, slpScale: 0.6 };
 let slpE = 0;
 const slpLast = new Float32Array(7);
 const _ppos = new THREE.Vector3();
@@ -182,7 +182,8 @@ export function tickStir(dt, t) {
   uJolt.value.set(jX, jZ, jSpeed > 0 ? Math.min(jReach, ja * jSpeed) : jReach,
     ja < 0 ? 0 : jK * (ja < 0.25 ? 1 : Math.max(0, 1 - (ja - 0.25) / 3.5)) * (jSpeed > 0 ? 1 : 0.8));
 
-  // (wakeswap) THE SLEEPER'S PUSH EASES. Her sphere is ~1.6 R (24.6 u at home, reach 1.9x = 47 u), and the slot
+  // (wakeswap) THE SLEEPER'S PUSH EASES. Her mover sphere is ~1.6 R (24.6 u at home, reach 1.9x = 47 u); the plants' sphere is
+  // STIR.slpScale 0.6 of it (shipped by Michael's call of 2026-11-19, B of the A/B/C stills; no longer an open knob). The slot
   // above turns on in ONE frame at the wake (and off in one at the calm): every plant within ~47 u was thrown up to
   // ~13 u sideways between two frames (and the flinchers within ~110 u withdrew), which read as the plants swapping.
   // Her PLANT push now follows her out of the sand (1 - bury on a buried build: a body under the sand parts

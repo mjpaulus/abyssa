@@ -20,7 +20,8 @@
 //           apart as dispSal), in world units;  flinch = the FLINCH term's push share (1 - smoothstep(2w, 4.5w, d)) at the origin.
 // Bars (pre-registered before the fix was run). Measured on main ac66c07 and on 75c487f alike: jump 8.05 u (a seagrass 25.8 u off
 // her, 0 -> 8.05 u in one frame), flinch jump 1.0, on the frame after L.dormant fell; the calm (WS_RED=snap) the same in reverse (8.05 -> 0).
-//   jump    the largest one-frame change of the disp vector over the near instances < 0.5 u
+//   jump    the largest one-frame change of the disp vector over the near instances < 0.15 u (0.5 at slpScale 1, where the snap jumped 8.05 u;
+//           at the shipped 0.6 the snap jumps 0.26 u, so a 0.5 bar went blind; fixed: 0.011 wake, 0.086 calm)
 //   flinch  the largest one-frame change of flinch < 0.25
 //   same    the plant kit's instance hash (matrices, vis, lod, variant, host matrices) is identical over the window (a rebuild or a
 //           LOD pop would show here; booked, a bar)
@@ -36,7 +37,7 @@ if (!['wake', 'calm'].includes(MODE) || !PORT) { console.error('usage: DRV_PORT=
 const RED = process.env.WS_RED || '';
 if (RED && RED !== 'snap') { console.error('WS_RED: snap'); process.exit(1); }
 const PIX = process.env.WS_PIX ? process.env.WS_PIX === '1' : MODE === 'wake';
-const NEAR = 60, BAR_JUMP = 0.5, BAR_FL = 0.25, W = 1920, H = 1080;
+const NEAR = 60, BAR_JUMP = 0.15, BAR_FL = 0.25, W = 1920, H = 1080;
 const START = [106.0, 11.3], WAY = [105.5, 33.25], OBS = { p: [98, 3], h: 5, t: [98, 39], th: 5 };
 const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
