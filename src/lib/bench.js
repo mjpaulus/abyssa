@@ -478,7 +478,15 @@ function step(n, fn, o = {}) {
     for (let i = 0; i < n; i++) {
       clock.elapsedTime += dt;
       H.update(dt, clock.elapsedTime);
-      if (o.render) { H.sky(); H.refraction(); H.post(dt); }
+      if (o.render) {
+        // (clawpoint) a LOOK camera for frame sequences: window.__benchCam.apply(camera) poses the lens for the draw only, and the game's
+        // own lens is put back after it (the follow spring never sees it). Debug only: unset, nothing changes
+        const vc = window.__benchCam;
+        let sp = null, sq = null;
+        if (vc) { sp = camera.position.clone(); sq = camera.quaternion.clone(); vc.apply(camera); camera.updateMatrixWorld(); }
+        H.sky(); H.refraction(); H.post(dt);
+        if (vc) { camera.position.copy(sp); camera.quaternion.copy(sq); camera.updateMatrixWorld(); }
+      }
       if (fn && fn(i) === false) break;
     }
   } finally { holdOff(); }

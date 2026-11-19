@@ -121,7 +121,8 @@
 // PC_RED variants (each must fail ITS bar): nopoint (__burial.set({ point: 0 }): the claw never raises) -> hold; fastturn (POINT.turn 1.0)
 // -> turnRate; noface (PC_AT=back; POINT.face -1, faceMax 4) -> turn. Framing's REDs: PC_ON=0 (close) and PC_RED=inband (inFrame's band), above.
 // ENV (besides DRV_PORT, a port of this probe's own: never 8777 / 8790 / 9419; the probe exits 2 before importing drv.mjs):
-//   PC_AT=back|ahead  the placement (point; default back)
+//   PC_AT=back|ahead|side  the placement (point; default back). side (clawpoint, a look tool, not a gate): 25 u off her +X side as she
+//                     will stand facing the opening, so the grounded lens (PC_ON=0) sees the major claw in profile
 //   PC_RED=<variant>  an opt-in RED (exit 5 when its bar failed, as it must; 3 when it did not)
 //   PC_ON=0|1         __pointcam.knobs.on for the run (framing / point; default: the build's)
 //   PC_PLACE=band     unset or band: the framing placement at 71-75 deg, the cue as the build has it, inFrame judged on the band alone
@@ -144,7 +145,7 @@ const REDS = { point: { nopoint: { set: { point: 0 }, bars: ['hold'] }, fastturn
 const RED = process.env.PC_RED || '';
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`PC_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no PC_RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 const AT = MODE === 'point' ? process.env.PC_AT || 'back' : MODE === 'lastward' ? 'lastward' : 'framing';
-if (MODE === 'point' && !['back', 'ahead'].includes(AT)) { console.error(`PC_AT: back | ahead (got ${JSON.stringify(AT)})`); process.exit(2); }
+if (MODE === 'point' && !['back', 'ahead', 'side'].includes(AT)) { console.error(`PC_AT: back | ahead (got ${JSON.stringify(AT)})`); process.exit(2); }
 if (RED && REDS[MODE][RED].at && REDS[MODE][RED].at !== AT) { console.error(`PC_RED ${RED} runs at PC_AT=${REDS[MODE][RED].at} only`); process.exit(2); }
 const ON = process.env.PC_ON == null || process.env.PC_ON === '' ? null : +process.env.PC_ON;
 if (ON != null && ON !== 0 && ON !== 1) { console.error('PC_ON: 0 | 1'); process.exit(2); }
@@ -157,6 +158,10 @@ if (ONRED && RED) { console.error('PC_ON=0 and PC_RED are two different REDs: on
 const KNOBS = process.env.PC_KNOBS ? JSON.parse(process.env.PC_KNOBS) : null;
 if (KNOBS && !['framing', 'walk'].includes(MODE)) { console.error('PC_KNOBS: framing / walk only'); process.exit(2); }
 const SHOTS = process.env.PC_SHOTS || '';
+// (clawpoint) PC_VIDEO=<dir>: from the calm, every frame of the 14 s RENDERED and every 3rd captured (0000.png ..., 960x600, 20 fps of game
+// time) for encode2.mjs; point / framing only. Its run books the verdict like a stills run (rendered)
+const VIDEO = process.env.PC_VIDEO || '';
+if (VIDEO && !['point', 'framing'].includes(MODE)) { console.error('PC_VIDEO: point / framing only'); process.exit(2); }
 if (SHOTS && !/^[\w.-]+$/.test(SHOTS)) { console.error(`PC_SHOTS: a plain file prefix (got ${JSON.stringify(SHOTS)})`); process.exit(2); }
 if (SHOTS && !['point', 'framing'].includes(MODE)) { console.error('PC_SHOTS: point / framing only'); process.exit(2); }
 const CALM_LINE = 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.', HOSE = 760, SECS = 14, D_HIM = 25;
@@ -191,6 +196,7 @@ const PLACE = `(async () => {
   const rp = C.riftPos(0);
   let ux, uz;
   if (${JSON.stringify(AT)} === 'ahead') { ux = rp.x - L.pos.x; uz = rp.z - L.pos.z; }
+  else if (${JSON.stringify(AT)} === 'side') { const w = Math.atan2(rp.x - L.pos.x, rp.z - L.pos.z); ux = Math.cos(w); uz = -Math.sin(w); }   // (clawpoint) a LOOK placement: off her +X (the claw's) side once she faces the opening, the claw in profile (judged as back)
   else { ux = L.sand.x; uz = L.sand.z; }
   const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
   let d = ${D_HIM}, x = L.pos.x + ux * d, z = L.pos.z + uz * d;
@@ -437,7 +443,7 @@ async function session(o) {
       if (ses.settleF) await c.ev(`window.__bench.step(${ses.settleF})`);
     }
     // (Task 10 review M4) a face() that ran out of frames is no placement: UNMEASURED
-    if (!fc.faced) throw new Error(`UNFACED: she did not come within 10 deg of facing him in ${fc.n} frames`);
+    if (!fc.faced && AT !== 'side') throw new Error(`UNFACED: she did not come within 10 deg of facing him in ${fc.n} frames`);
     const pre = await c.ev(`window.__pcR.state()`);
     console.log(`stood ${(stoodF / 60).toFixed(2)} s after the wake; placed ${JSON.stringify(pl)}; faced him in ${fc.n} frames: ${JSON.stringify(pre)}`);
     if (o.on != null) ses.knobs = await c.ev(`(() => { const C = window.__pointcam; if (!C) return null; C.knobs.on = ${o.on}; return Object.assign({}, C.knobs); })()`);
@@ -489,6 +495,25 @@ async function session(o) {
       mkdirSync(SHOT_DIR, { recursive: true }); writeFileSync(file, Buffer.from(url.split(',')[1], 'base64'));
       shots.push({ name, s, file, row: await c.ev(`window.__pcR.S[window.__pcR.S.length - 1]`) });
       console.log(`still ${file} at ${s} s`);
+    }
+    if (VIDEO) {   // (clawpoint) PC_VIDEO: every frame rendered, every 3rd captured (20 fps of game time), the playtest panels hidden
+      mkdirSync(VIDEO, { recursive: true });
+      // PC_VCAM='{"x":1.8,"y":0.35,"z":0.8,"lx":0.2,"ly":0.05,"lz":0.9}': a LOOK lens (bench.js __benchCam, the draw only) at that spot (eye, look-at)
+      // in her body frame (units of R: her matrix carries her scale), fixed in the WORLD where her frame stands at the raise (so her body's own motion reads), else the play lens
+      if (process.env.PC_VCAM) await c.ev(`(() => { const V = ${process.env.PC_VCAM}; let P = null, Q = null;
+        window.__benchCam = { apply(cam) { const L = window.lev;
+          if (!P && L.pointPh >= 2) { L.body.updateMatrixWorld(true); const m = L.body.matrixWorld;
+            P = cam.position.clone().set(V.x, V.y, V.z); P.applyMatrix4(m);
+            Q = cam.position.clone().set(V.lx, V.ly, V.lz); Q.applyMatrix4(m); }
+          if (P) { cam.position.copy(P); cam.lookAt(Q); } } }; return 1; })()`);
+      await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), 1)`);
+      let vn = 0;
+      while (at < N) {
+        const n = Math.min(3, N - at); await c.ev(`window.__pcR.step(${n}, { render: true })`); at += n;
+        const r = await c.send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: 1280, height: 800, scale: 0.75 } });
+        writeFileSync(join(VIDEO, String(vn++).padStart(4, '0') + '.png'), Buffer.from(r.result.data, 'base64'));
+      }
+      console.log(`video ${vn} frames -> ${VIDEO}`);
     }
     while (at < N) { const n = Math.min(300, N - at); await c.ev(`window.__pcR.step(${n}${SHOTS ? ', { render: true }' : ''})`); at += n; }
     Object.assign(ses, { place0: pl0, ins, stoodF, place: pl, faceF: fc.n, faced: fc.faced, pre, calmBy, shots,
