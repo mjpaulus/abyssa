@@ -34,7 +34,7 @@ const CASES = ['take', 'walk', 'a0', 'a90', 'am90', 'a180', 'off'];
 const [, , WHICH, PORT] = process.argv;
 const EDGE = /^e(\d+(?:\.\d+)?)_(\d+(?:\.\d+)?)_([fbsl])$/;   // e<u off the strip edge>_<bearing, a fraction of the way round from her sand side>_<f facing her | b back to her | s her on his right | l on his left>
 if (!(CASES.includes(WHICH) || WHICH === 'all' || EDGE.test(WHICH)) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/riseclip-probe.mjs <' + CASES.join('|') + '|all> <game port>'); process.exit(2); }
-const SWING = process.env.CP_SWING == null || process.env.CP_SWING === '' ? null : +process.env.CP_SWING;
+const CRANE = process.env.CP_CRANE == null || process.env.CP_CRANE === '' ? null : +process.env.CP_CRANE;
 const JUMP = +(process.env.CP_JUMP || 0.5), TRACE = process.env.CP_TRACE === '1', RENDER = process.env.CP_RENDER !== '0';
 const START = [106.0, 11.3], WAY = [105.5, 33.25], OFF_TO = 18, BACK_MIN = 16;
 const [W, H] = (process.env.CP_VIEW || '1920x1080').split('x').map(Number);   // CP_VIEW=1280x720: the first take's viewport
@@ -47,7 +47,7 @@ const { plug, drift, unmeasured, lost } = await import('./clockplug.mjs');
 let chromeStarted = false;
 process.on('exit', () => { if (chromeStarted) stop(); try { rmSync(process.env.DRV_DIR, { recursive: true, force: true }); } catch (e) { } });
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(130));
-const TAG = process.env.CP_TAG || (SWING == null ? 'default' : 'swing' + SWING) + '-port' + PORT;
+const TAG = process.env.CP_TAG || (CRANE == null ? 'default' : 'crane' + CRANE) + '-port' + PORT;
 
 await start('about:blank'); chromeStarted = true;
 const c = await connect();
@@ -64,7 +64,7 @@ if (process.env.CP_SEED !== '0') await c.send('Page.addScriptToEvaluateOnNewDocu
 const INSTALL = `(async () => {
   const BC = await import('/src/entities/sleeper/bodyCols.js'), { camera } = await import('/src/core.js'), THREE = await import('three');
   const hv = new THREE.Vector3();
-  const L = window.lev; if (!L || L.kind !== 'brooder' || !L.buried) return { err: 'no buried brooder' };
+  const L = window.lev; if (!L || L.kind !== 'brooder' || !L.buried) return { err: 'no buried brooder' }; window.__cpT = await import('/src/world/terrain.js');
   window.__crecamDbg = true;
   const D = 180 / Math.PI, r4 = v => Math.round(v * 1e4) / 1e4;
   const R = window.__cpR = { S: [], T: [], on: false, wakeF: -1, stoodF: -1, gf: 0, prev: null,
@@ -86,11 +86,15 @@ const INSTALL = `(async () => {
       const salOut = !front || Math.abs(hv.x) > 1 || Math.abs(hv.y) > 1;
       R.S.push({ i: R.S.length, in: inside ? 1 : 0, why, in15: in15 ? 1 : 0, dp: r4(dp), rel: r4(rel), raw: r4(raw), dAng: r4(dAng), k: st.k, eng: st.eng, drop: st.drop, dropT: st.dropT,
         dropMiss: st.dropMiss, guardN: st.guardN, guardMain: st.guardMain, keepN: st.keepN, keepFail: st.keepFail, hold: st.hold, cd: st.camDist, rawB: r4(dbg.raw), dT: r4(dbg.tgt), dS: r4(dbg.spring), dG: r4(dbg.guard), dF: r4(dbg.final), lift: st.lift,
-        swingN: st.swingN == null ? null : st.swingN, guardSw: st.guardSw == null ? null : st.guardSw, swingDeg: st.swingDeg == null ? null : st.swingDeg, cam: [r4(cp.x), r4(cp.y), r4(cp.z)], sal: [r4(pp.x), r4(pp.y), r4(pp.z)], dL: r4(Math.hypot(pp.x - L.pos.x, pp.z - L.pos.z)),
+        crk: window.__risecrane ? window.__risecrane.state().k : null, crWhy: window.__risecrane ? window.__risecrane.state().why : null, crAlt: window.__risecrane ? window.__risecrane.state().alt : null, cam: [r4(cp.x), r4(cp.y), r4(cp.z)], sal: [r4(pp.x), r4(pp.y), r4(pp.z)], dL: r4(Math.hypot(pp.x - L.pos.x, pp.z - L.pos.z)),
         shake: r4(shk), salOut: salOut ? 1 : 0, ndc: [r4(hv.x), r4(hv.y)], dormant: L.dormant ? 1 : 0, bury: r4(L.bury || 0), stood: L.hasStood ? 1 : 0 });
       if (${process.env.CP_SCAN === '1'}) { const r = R.S[R.S.length - 1], y = window.player.yaw, ax = px - L.pos.x, az = pz - L.pos.z, al = Math.hypot(ax, az) || 1;
         const clear = (bx, bz, d, h) => { for (let k = 1; k <= 24; k++) { const f = k / 24; if (BC.bodyBlocked(px + bx * d * f, py + h * f, pz + bz * d * f, 0.4)) return false; } return true; };
         const scan = (bx, bz) => [4, 6, 8, 10, 12].map(d => { for (let h = 0; h <= 12; h += 1) if (clear(bx, bz, d, h)) return h; return 99; });
+        { const TT = [0, 45, -45, 90, -90, 135, -135, 180], DD = [6, 9, 12], HH = [2, 4, 6], b0 = Math.atan2(-Math.cos(y), -Math.sin(y)); const g = []; const T = window.__cpT;
+          for (const t of TT) { const a = b0 + t * Math.PI / 180, bx = Math.cos(a), bz = Math.sin(a); for (const d of DD) for (const h of HH) { const x = px + bx * d, yy = py + h, z = pz + bz * d;
+            g.push(BC.bodyBlocked(x, yy, z, 0.6) || BC.bodyBlockedAhead(x, yy, z, 0.6, 6) ? 1 : (T && yy < T.shutFloorY(x, z, 0) + 1.2 ? 2 : 0)); } }
+          r.grid = g.join(''); const hx = (L.pos.x - px), hz = (L.pos.z - pz); r.herAng = Math.round(((Math.atan2(hz, hx) - b0 + 3 * Math.PI) % (2 * Math.PI) - Math.PI) * 180 / Math.PI); }
         r.R = r4(L.R); r.bodyY = r4(L.bodyY); r.stand = r4(L.stand); r.lp = [r4(L.pos.x), r4(L.bodyY), r4(L.pos.z)]; r.gy = r4(pp.y - 1.35);
         r.scBack = scan(-Math.sin(y), -Math.cos(y)); { let m = 0; for (; m <= 14; m += 0.5) if (BC.shellPlanNear(px, py, pz, m) || BC.limbNearXZ(px, pz, m)) break; r.plan = m; let n = 0; for (; n <= 14; n += 0.5) if (BC.shellPlanNear(px, py, pz, n)) break; r.planS = n; } r.scAway = scan(ax / al, az / al); }
       if (${TRACE}) { const q = camera.quaternion; R.T.push([cp.x, cp.y, cp.z, q.x, q.y, q.z, q.w]); }
@@ -128,7 +132,7 @@ async function boot() {
   if (fresh.wound || fresh.hPulled || !fresh.dormant) throw new Error('not a fresh harpoon ' + JSON.stringify(fresh));
   if (fresh.view[0] !== W || fresh.view[1] !== H) throw new Error('viewport ' + fresh.view);
 }
-const knob = async () => { if (SWING != null) await c.ev(`(window.__crecam.knobs.swing = ${SWING}, 1)`); return c.ev(`JSON.parse(JSON.stringify(window.__crecam.knobs))`); };
+const knob = async () => { if (CRANE != null) await c.ev(`(window.__risecrane && (window.__risecrane.knobs.on = ${CRANE}), 1)`); return c.ev(`JSON.parse(JSON.stringify({ crecam: window.__crecam.knobs, crane: window.__risecrane ? window.__risecrane.knobs : null }))`); };
 const len = () => c.ev(`window.__cpR.S.length`);
 const ev = s => c.ev(s);
 
@@ -175,7 +179,7 @@ async function runTake(ses, discover) {
     await frame();
     if (wakeF < 0) { if (!(await ev(`!!window.lev.dormant`))) { wakeF = gf; ses.marks.wakeVideoS = +(gf / 60).toFixed(3); } continue; }
     const k = gf - wakeF;
-    if (discover) { if (stoodF < 0 && await ev(`!!window.lev.hasStood`)) { stoodF = gf; ses.marks.stoodVideoS = +(gf / 60).toFixed(3); } if (stoodF >= 0 && gf - stoodF >= 120) break; if (k > 14 * 60) break; continue; }
+    if (discover) { if (stoodF < 0 && await ev(`!!window.lev.hasStood`)) { stoodF = gf; ses.marks.stoodVideoS = +(gf / 60).toFixed(3); } if (stoodF >= 0 && gf - stoodF >= 240) break; if (k > 14 * 60) break; continue; }
     if (phase === 'wait' && k >= 51) { strafe = await awayKey(); await c.key(strafe, true); phase = 'strafe'; ses.marks.strafe = strafe; }
     if (phase === 'strafe' && (k >= 240 || (await dL()) >= OFF_TO)) { await c.key(strafe, false); phase = 'idle'; }
     if (k >= 240 && (phase === 'idle' || phase === 'strafe' || phase === 'turn')) {
@@ -190,7 +194,7 @@ async function runTake(ses, discover) {
     if (phase === 'faced' && !backing && (await dL()) < BACK_MIN) { backing = true; await c.key('KeyS', true); }
     if (backing && (await dL()) >= BACK_MIN + 1) { backing = false; await c.key('KeyS', false); phase = 'done'; }
     if (stoodF < 0 && await ev(`!!window.lev.hasStood`)) { stoodF = gf; ses.marks.stoodVideoS = +(gf / 60).toFixed(3); }
-    if (stoodF >= 0 && gf - stoodF >= 120) break;
+    if (stoodF >= 0 && gf - stoodF >= 240) break;
     if (k > 14 * 60) break;
   }
   if (backing) await c.key('KeyS', false);
@@ -227,11 +231,11 @@ async function runStand(ses, cs) {
   for (;;) {
     await ev(`window.__cpR.step(20, ${RENDER})`);
     const [n, sf] = await ev(`[window.__cpR.S.length, window.__cpR.stoodF]`);
-    if ((sf >= 0 && n >= sf + 120) || n >= wakeF + 14 * 60) break;
+    if ((sf >= 0 && n >= sf + 240) || n >= wakeF + 14 * 60) break;
   }
 }
 
-const out = { case: WHICH, swing: SWING, jumpBar: JUMP, sessions: {}, bars: {} };
+const out = { case: WHICH, crane: CRANE, jumpBar: JUMP, sessions: {}, bars: {} };
 const clocks = [];
 const OUT = resolve(process.env.CP_OUT || `out/probe/riseclip-${WHICH}-${TAG}.json`);
 let anyFail = false, anyVoid = false;
@@ -253,7 +257,7 @@ try {
     ses.summary = { frames: win.length, wakeF, stoodF, inside: ins.length, in15: win.filter(r => r.in15).length, insideRuns: runs.map(u => ({ fromS: +((u.from - wakeF) / 60).toFixed(3), toS: +((u.to - wakeF) / 60).toFixed(3), n: u.to - u.from + 1, video: vt(u.from) })),
       whyParts: [...new Set(ins.map(r => r.why))], maxRel: jr.rel, maxRelAtS: jr.i != null ? +((jr.i - wakeF) / 60).toFixed(3) : null, maxRelVideo: jr.i != null ? vt(jr.i) : null, maxRaw: Math.max(...win.slice(1).map(r => r.raw)), maxRelShaken: Math.max(0, ...win.slice(1).filter(shaken).map(r => r.rel)), shakenN: win.filter(shaken).length,
       maxDAng: Math.max(...win.slice(1).map(r => r.dAng)), minDp: Math.min(...win.map(r => r.dp)), dropMiss: win.length ? win[win.length - 1].dropMiss - win[0].dropMiss : 0,
-      swingN: win.length && win[win.length - 1].swingN != null ? win[win.length - 1].swingN - win[0].swingN : null,
+      craneN: win.filter(r => r.crk > 0).length,
       closeAfterStood: (() => { const a = win.filter(r => r.stood); return a.length ? { n: a.length, dpLt27: a.filter(r => r.dp < 2.7).length, minDp: Math.min(...a.map(r => r.dp)) } : null; })() };
     // the hold after her rise: frames from the wake to the stand + 2 s where the lens is held within 2.7 u of his helmet
     ses.summary.close27 = win.filter(r => r.i >= wakeF && r.dp < 2.7).length;
@@ -263,7 +267,7 @@ try {
     const s = ses.summary;
     const okIn = s.inside === 0, okJ = s.maxRel <= JUMP, okF = s.salOut === 0;
     out.bars[cs] = { inside: okIn, jump: okJ, framed: okF };
-    console.log(`${cs}: ${okIn ? 'ok  ' : 'FAIL'} inside ${s.inside} frames (in15 ${s.in15}) runs ${JSON.stringify(s.insideRuns)} parts ${JSON.stringify(s.whyParts)} | ${okJ ? 'ok  ' : 'FAIL'} jump rel max ${s.maxRel} u at +${s.maxRelAtS} s${s.maxRelVideo != null ? ' (video ' + s.maxRelVideo + ' s)' : ''} (bar ${JUMP}; shaken frames apart: ${s.shakenN}, their max ${s.maxRelShaken}); raw ${s.maxRaw}, bearing ${s.maxDAng.toFixed(2)} deg; minDp ${s.minDp}; dropMiss ${s.dropMiss}; swingN ${s.swingN}; close27 ${s.close27}; salOut ${s.salOut}${ses.stand ? ' stand ' + JSON.stringify(ses.stand) : ''}`);
+    console.log(`${cs}: ${okIn ? 'ok  ' : 'FAIL'} inside ${s.inside} frames (in15 ${s.in15}) runs ${JSON.stringify(s.insideRuns)} parts ${JSON.stringify(s.whyParts)} | ${okJ ? 'ok  ' : 'FAIL'} jump rel max ${s.maxRel} u at +${s.maxRelAtS} s${s.maxRelVideo != null ? ' (video ' + s.maxRelVideo + ' s)' : ''} (bar ${JUMP}; shaken frames apart: ${s.shakenN}, their max ${s.maxRelShaken}); raw ${s.maxRaw}, bearing ${s.maxDAng.toFixed(2)} deg; minDp ${s.minDp}; dropMiss ${s.dropMiss}; craneN ${s.craneN}; close27 ${s.close27}; salOut ${s.salOut}${ses.stand ? ' stand ' + JSON.stringify(ses.stand) : ''}`);
     if (!okF) console.log(`${cs}: FAIL framed: his helmet out of the drawn frame on ${s.salOut} frames`);
     if (!okIn || !okJ || !okF) anyFail = true;
     if (!win.some(r => r.stood)) { console.log(`${cs}: she never stood in the window (UNMEASURED)`); anyVoid = true; }
