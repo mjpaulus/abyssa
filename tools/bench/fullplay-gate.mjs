@@ -210,6 +210,10 @@ const GATE_JS = `(async () => {
     }
     const inside = BC.bodyBlocked(x, y, z, 0), why = BC.blockWhy, near = inside || BC.bodyBlocked(x, y, z, 0.15);
     const Lg = g.lens;
+    // (risecrane) the rise crane's frames (game.js RISECRANE, k > 0) by phase: her rise (before she stood), after she stood and before the
+    // calm (its hand-back: the fight's first ~1.8 s), after the calm; and with her hammer's threat up (threatE > 0.3). Booked, not gated.
+    { const rk = window.__risecrane ? window.__risecrane.state().k : 0; const K = g.crane = g.crane || { n: 0, rise: 0, stood: 0, calm: 0, threat: 0, lastStoodT: null };
+      if (rk > 0) { K.n++; if (L.calmed) K.calm++; else if (L.hasStood) { K.stood++; K.lastStoodT = +t.toFixed(2); } else K.rise++; if ((L.threatE || 0) > 0.3) K.threat++; } }
     // the lens in SAL (the other clip): within 0.45 u of his body's axis, boots (eye - 1.35) to bonnet top (eye + 0.4)
     const sy = Math.max(P.pos.y - 1.35, Math.min(P.pos.y + 0.4, y)), inSal = Math.hypot(x - P.pos.x, y - sy, z - P.pos.z) < 0.45;
     if (L.calmed) { Lg.calmN++; if (inside) Lg.calmIn++; if (near) Lg.calmNear++; if (inSal) Lg.salCalm++; }
@@ -602,7 +606,7 @@ if (GATE) {
     verdict: B.red ? `RED (${B.red} frames ${nm} > ${WASH_BLOWN} blown outside the burns or > ${WASH_CAP} in all)` : 'GREEN', at: B.at.slice(0, 16) });
   console.log('GATE', gateRed ? 'RED' : 'GREEN', JSON.stringify({
     wash: { fight: phaseOut(WF, 'in the fight'), calm: phaseOut(WC, 'after the calm') },
-    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' }, shellClr: g.shellClr,
+    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' }, shellClr: g.shellClr, crane: g.crane || null,
     calm: C, route: ROUTE, way, clock, shots: shotList, why }));
 }
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));

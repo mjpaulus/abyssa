@@ -84,7 +84,9 @@ const INSTALL = `(async () => {
       // his helmet (the pivot) in the drawn frame: NDC, and out of frame (behind the lens or |x| / |y| > 1)
       camera.updateMatrixWorld(); hv.set(px, py, pz).applyMatrix4(camera.matrixWorldInverse); const front = hv.z < 0; hv.applyMatrix4(camera.projectionMatrix);
       const salOut = !front || Math.abs(hv.x) > 1 || Math.abs(hv.y) > 1;
-      R.S.push({ i: R.S.length, in: inside ? 1 : 0, why, in15: in15 ? 1 : 0, dp: r4(dp), rel: r4(rel), raw: r4(raw), dAng: r4(dAng), k: st.k, eng: st.eng, drop: st.drop, dropT: st.dropT,
+      // a limb between the lens and his helmet (not a bar: booked so the report can say how often she occludes him)
+      let occl = 0; for (let q = 1; q < 16; q++) { const f = q / 16; if (BC.bodyBlocked(cp.x + (px - cp.x) * f, cp.y + (py - cp.y) * f, cp.z + (pz - cp.z) * f, 0)) { occl = 1; break; } }
+      R.S.push({ i: R.S.length, in: inside ? 1 : 0, occl, why, in15: in15 ? 1 : 0, dp: r4(dp), rel: r4(rel), raw: r4(raw), dAng: r4(dAng), k: st.k, eng: st.eng, drop: st.drop, dropT: st.dropT,
         dropMiss: st.dropMiss, guardN: st.guardN, guardMain: st.guardMain, keepN: st.keepN, keepFail: st.keepFail, hold: st.hold, cd: st.camDist, rawB: r4(dbg.raw), dT: r4(dbg.tgt), dS: r4(dbg.spring), dG: r4(dbg.guard), dF: r4(dbg.final), lift: st.lift,
         crk: window.__risecrane ? window.__risecrane.state().k : null, crWhy: window.__risecrane ? window.__risecrane.state().why : null, crAlt: window.__risecrane ? window.__risecrane.state().alt : null, cam: [r4(cp.x), r4(cp.y), r4(cp.z)], sal: [r4(pp.x), r4(pp.y), r4(pp.z)], dL: r4(Math.hypot(pp.x - L.pos.x, pp.z - L.pos.z)),
         shake: r4(shk), salOut: salOut ? 1 : 0, ndc: [r4(hv.x), r4(hv.y)], dormant: L.dormant ? 1 : 0, bury: r4(L.bury || 0), stood: L.hasStood ? 1 : 0 });
@@ -262,13 +264,21 @@ try {
     // the hold after her rise: frames from the wake to the stand + 2 s where the lens is held within 2.7 u of his helmet
     ses.summary.close27 = win.filter(r => r.i >= wakeF && r.dp < 2.7).length;
     ses.summary.salOut = win.filter(r => r.salOut).length;   // frames his helmet is out of the drawn frame (a lens swung round to his front)
+    // (risecrane) the framed bar judges THE RISE: from the wake to the stand + the crane's hand-back (RISECRANE.tOut, 1.8 s = 108 frames, whether
+    // the crane is on or off); before the wake (the pull's wrench) and after it (her fight's lens: BOSSCAM, CRECAM) are booked apart, not barred
+    const rEnd = (stoodF >= 0 ? stoodF : 1e9) + 108;
+    ses.summary.salOutPre = win.filter(r => r.salOut && r.i < wakeF).length;
+    ses.summary.salOutRise = win.filter(r => r.salOut && r.i >= wakeF && r.i < rEnd).length;
+    ses.summary.salOutAfter = win.filter(r => r.salOut && r.i >= rEnd).length;
+    ses.summary.occl = win.filter(r => r.occl && r.i >= wakeF && r.i < rEnd).length;
+    ses.summary.maxDAngRise = Math.max(0, ...win.filter(r => r.i > wakeF && r.i < rEnd && !shaken(r)).map(r => r.dAng));
     ses.rows = win.map(r => ({ ...r, t: +((r.i - wakeF) / 60).toFixed(3), v: vt(r.i) }));
     out.sessions[cs] = ses;
     const s = ses.summary;
-    const okIn = s.inside === 0, okJ = s.maxRel <= JUMP, okF = s.salOut === 0;
+    const okIn = s.inside === 0, okJ = s.maxRel <= JUMP, okF = s.salOutRise === 0;
     out.bars[cs] = { inside: okIn, jump: okJ, framed: okF };
-    console.log(`${cs}: ${okIn ? 'ok  ' : 'FAIL'} inside ${s.inside} frames (in15 ${s.in15}) runs ${JSON.stringify(s.insideRuns)} parts ${JSON.stringify(s.whyParts)} | ${okJ ? 'ok  ' : 'FAIL'} jump rel max ${s.maxRel} u at +${s.maxRelAtS} s${s.maxRelVideo != null ? ' (video ' + s.maxRelVideo + ' s)' : ''} (bar ${JUMP}; shaken frames apart: ${s.shakenN}, their max ${s.maxRelShaken}); raw ${s.maxRaw}, bearing ${s.maxDAng.toFixed(2)} deg; minDp ${s.minDp}; dropMiss ${s.dropMiss}; craneN ${s.craneN}; close27 ${s.close27}; salOut ${s.salOut}${ses.stand ? ' stand ' + JSON.stringify(ses.stand) : ''}`);
-    if (!okF) console.log(`${cs}: FAIL framed: his helmet out of the drawn frame on ${s.salOut} frames`);
+    console.log(`${cs}: ${okIn ? 'ok  ' : 'FAIL'} inside ${s.inside} frames (in15 ${s.in15}) runs ${JSON.stringify(s.insideRuns)} parts ${JSON.stringify(s.whyParts)} | ${okJ ? 'ok  ' : 'FAIL'} jump rel max ${s.maxRel} u at +${s.maxRelAtS} s${s.maxRelVideo != null ? ' (video ' + s.maxRelVideo + ' s)' : ''} (bar ${JUMP}; shaken frames apart: ${s.shakenN}, their max ${s.maxRelShaken}); raw ${s.maxRaw}, bearing ${s.maxDAng.toFixed(2)} deg; minDp ${s.minDp}; dropMiss ${s.dropMiss}; craneN ${s.craneN}; close27 ${s.close27}; salOut rise ${s.salOutRise} (pre-wake ${s.salOutPre}, after ${s.salOutAfter}); occluded ${s.occl}; bearing max ${s.maxDAngRise.toFixed(2)} deg/frame${ses.stand ? ' stand ' + JSON.stringify(ses.stand) : ''}`);
+    if (!okF) console.log(`${cs}: FAIL framed: his helmet out of the drawn frame on ${s.salOutRise} frames of the rise`);
     if (!okIn || !okJ || !okF) anyFail = true;
     if (!win.some(r => r.stood)) { console.log(`${cs}: she never stood in the window (UNMEASURED)`); anyVoid = true; }
   }
