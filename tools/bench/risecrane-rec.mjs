@@ -7,7 +7,8 @@
 // Both: a fresh profile (abyssa.chart.v1 removed before the load), the clock PLUGGED (clockplug.mjs), Math.random seeded on every document
 // and re-seeded from the plugged frame count before every stepped frame (riseclip-probe's rule: the lens shake is random, and the before
 // and after takes must draw the same numbers), every game frame rendered, every EVERY-th captured (2 = 30 fps of game time), 1920x1080.
-// ENV: VD_HOLD (s after the stand, default 4), VD_EVERY (default 2), VD_CRANE (sets __risecrane.knobs.on; unset = the build's own), VD_SEED.
+// ENV: VD_HOLD (s after the stand, default 4), VD_EVERY (default 2), VD_CRANE (sets __risecrane.knobs.on; unset = the build's own), VD_KNOBS (JSON merged into
+// __risecrane.knobs), VD_SEED.
 // The log books per captured frame: the lens, his place, her state, __risecrane / __risecam / __crecam state, his helmet's NDC.
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 8794, 8840, 9419].includes(P)) { console.error('set DRV_PORT to a port of its own'); process.exit(2); }
@@ -53,6 +54,7 @@ console.log('FRESH', JSON.stringify(fresh));
 if (fresh.wound || fresh.hPulled || !fresh.dormant) { console.error('not a fresh harpoon'); process.exit(1); }
 if (fresh.view[0] !== W || fresh.view[1] !== H) { console.error('viewport is ' + fresh.view); process.exit(2); }
 if (CRANE != null) await c.ev(`(window.__risecrane && (window.__risecrane.knobs.on = ${CRANE}), 1)`);
+if (process.env.VD_KNOBS) await c.ev(`(Object.assign(window.__risecrane.knobs, ${process.env.VD_KNOBS}), 1)`);   // a look-dev knob patch (JSON)
 await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), 1)`);
 let n = 0, ph = 0, gf = 0;
 const log = [];

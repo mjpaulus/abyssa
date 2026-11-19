@@ -25,7 +25,7 @@
 //            frame (2.6x that). At 2.2-4 u from his helmet 0.5 u is a 7-13 deg swing of the view about him in 1/60 s, which the eye follows as
 //            a fast move (a 30 fps video shows two such frames as one ~1 u step); past it, on main, is the snap that reads as a cut.
 // Exit 0 pass | 1 a bar failed | 2 UNMEASURED | 4 LOST. CP_SWING=<deg> sets __crecam.knobs.swing before E (0 = main's lens: the RED).
-// CP_TRACE=1 books the lens at full precision (x, y, z and the quaternion, every frame of the window) for the swing-0 vs main compare.
+// CP_KNOBS='<json>' merges into __risecrane.knobs before E (look-dev). CP_TRACE=1 books the lens at full precision (x, y, z and the quaternion, every frame of the window) for the swing-0 vs main compare.
 // JSON -> CP_OUT (default out/probe/riseclip-<case>-<tag>.json). ENV: DRV_PORT, CP_SWING, CP_JUMP, CP_TRACE, CP_TAG, CP_OUT, CP_RENDER (0 = no
 // render in the hands-off cases; default 1).
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
@@ -134,7 +134,7 @@ async function boot() {
   if (fresh.wound || fresh.hPulled || !fresh.dormant) throw new Error('not a fresh harpoon ' + JSON.stringify(fresh));
   if (fresh.view[0] !== W || fresh.view[1] !== H) throw new Error('viewport ' + fresh.view);
 }
-const knob = async () => { if (CRANE != null) await c.ev(`(window.__risecrane && (window.__risecrane.knobs.on = ${CRANE}), 1)`); return c.ev(`JSON.parse(JSON.stringify({ crecam: window.__crecam.knobs, crane: window.__risecrane ? window.__risecrane.knobs : null }))`); };
+const knob = async () => { if (CRANE != null) await c.ev(`(window.__risecrane && (window.__risecrane.knobs.on = ${CRANE}), 1)`); if (process.env.CP_KNOBS) await c.ev(`(Object.assign(window.__risecrane.knobs, ${process.env.CP_KNOBS}), 1)`); return c.ev(`JSON.parse(JSON.stringify({ crecam: window.__crecam.knobs, crane: window.__risecrane ? window.__risecrane.knobs : null }))`); };
 const len = () => c.ev(`window.__cpR.S.length`);
 const ev = s => c.ev(s);
 

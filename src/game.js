@@ -7,7 +7,7 @@ import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, pre
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint, checkRelief, setExtraFloor } from './world/terrain.js';
 import { lipMeanY, resetJam, setFissureShut, FISSURE, fissureDist, fissureLocal, fissureWorld, fissureShut, openRunAt } from './world/fissureShape.js';
-import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
+import { buildFlora, updateFlora, rockColliders, reseedFlora, kelp } from './world/flora.js';
 import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
@@ -1801,18 +1801,34 @@ window.__risecam = { knobs: RISECAM, state: () => ({ beh: rcBeh, k: +rcK.toFixed
 //   - the mouse owns the view: a real look (RISECAM's 5 deg net / 15 deg path from the crack) or a pause hands back at once (on the tOut ramp)
 //     and it stays off for the rest of the rise.
 // on: 0 = today's lens bit for bit (every statement below is behind k > 0 or the window; k never leaves 0). `__risecrane.state()`.
-const RISECRANE = { on: 1, near: [1.5, 2.0], cone: 25, dR: 0.7, hR: 0.28, aimAhead: 6, aimUp: 1.6, tIn: 1.6, tOut: 1.8, m: 0.6, ahead: 6, slide: 5,
-  alts: [[0, 0], [0, 2], [0, 4], [-2, 2], [-4, 4]], lookNet: 5, lookPath: 15, lookTau: 0.3 };
+const RISECRANE = { on: 1, near: [1.5, 2.0], cone: 25, dR: 0.7, hR: 0.28, aimAhead: 6, aimUp: 1.6, tIn: 1.6, tOut: 1.8, maxT: 9, threat: 0.3, m: 0.6, ahead: 6,
+  kelpR: 2.6, kelpLine: 1.6, slide: 5, alts: [[0, 0, 0], [0, 2, 0], [0, 0, 25], [0, 0, -25], [0, 2, 25], [0, 2, -25], [0, 0, 45], [0, 0, -45], [-2, 2, 0], [-4, 4, 0], [-2, 2, 45], [-2, 2, -45]],
+  lookNet: 5, lookPath: 15, lookTau: 0.3 };
 let rkK = 0, rkFrom = 0, rkTo = 0, rkU = 1, rkDur = 1, rkNeed = 0, rkSide = 0, rkOpen = false, rkOff = false, rkY0 = 0, rkP0 = 0, rkPath = 0, rkRecent = 0;
-let rkYawWas = 0, rkPitchWas = 0, rkD = 0, rkH = 0, rkAlt = 0, rkB = 0, rkRot = 0, rkWhy = '', rkN = 0, rkNStood = 0, rkNThreat = 0, rkBlockN = 0, rkWorldN = 0, rkSlideMax = 0;
+let rkYawWas = 0, rkPitchWas = 0, rkD = 0, rkH = 0, rkDb = 0, rkT = 0, rkKelpN = 0, rkAlt = 0, rkB = 0, rkRot = 0, rkWhy = '', rkN = 0, rkNStood = 0, rkNThreat = 0, rkBlockN = 0, rkWorldN = 0, rkSlideMax = 0;
 const _rkS = V3(), _rkDir = V3();
-// is a crane spot (pivot + bearing b, reach d, height h) clear of her and of the world? (writes _rkS)
+// is (x, y, z) within r (u, in plan) of a kelp stalk of zone zi, at or under its crown? (flora.js kelp.data: the stalks' feet and heights;
+// the camera has no plant colliders: a lens parked in a kelp stand reads as a screen of blades, measured on the beside take)
+function rkKelp(x, y, z, r, zi) {
+  const D = kelp.data;
+  for (let i = 0; i < D.length; i++) {
+    const k = D[i]; if (k.zi !== zi) continue;
+    const dx = x - k.p.x; if (dx > r || dx < -r) continue;
+    const dz = z - k.p.z; if (dz > r || dz < -r) continue;
+    if (dx * dx + dz * dz < r * r && y < k.p.y + k.h + 0.5) return true;
+  }
+  return false;
+}
+// is a crane spot (pivot + bearing b, reach d, height h) clear of her, of the world and of kelp? (writes _rkS)
 function rkClear(piv, b, d, h, zi) {
   const C = RISECRANE, cx = Math.cos(b), cz = Math.sin(b);
   _rkS.set(piv.x + cx * d, piv.y + h, piv.z + cz * d);
   if (bodyBlocked(_rkS.x, _rkS.y, _rkS.z, C.m) || bodyBlockedAhead(_rkS.x, _rkS.y, _rkS.z, C.m, C.ahead)) return false;
   const l = Math.hypot(d, h); _rkDir.set(cx * d / l, h / l, cz * d / l);
   if (clearCamDistance(piv, _rkDir, l, zi, false) < l - 1e-6) return false;
+  // the kelp: round the spot, and a third and two thirds of the way in toward his helmet (a stand between the lens and him)
+  if (rkKelp(_rkS.x, _rkS.y, _rkS.z, C.kelpR, zi)) { rkKelpN++; return false; }
+  for (let q = 1; q <= 2; q++) { const f = q / 3; if (rkKelp(_rkS.x + (piv.x - _rkS.x) * f, _rkS.y + (piv.y - _rkS.y) * f, _rkS.z + (piv.z - _rkS.z) * f, C.kelpLine, zi)) { rkKelpN++; return false; } }
   return true;
 }
 // the frame's crane: k, and the crane's bearing / reach / height (rkB, rkD, rkH). Before the lens target is blended (riseCrane).
@@ -1822,15 +1838,18 @@ function riseCraneFrame(dt, zi, inCrack) {
   rkYawWas = player.yaw; rkPitchWas = player.pitch;
   rkRecent = rkRecent * Math.exp(-Math.min(dt, 0.1) / C.lookTau) + dl;
   const her = !!(L && L.kind === 'brooder' && L.buried && L.body && L.pos);
-  if (!her || L.dormant || !L.cracked) { rkOpen = false; rkOff = false; rkNeed = 0; rkSide = 0; }
-  const win = her && !L.dormant && !L.calmed && !!L.cracked && !L.hasStood;
+  if (!her || L.dormant || !L.cracked) { rkOpen = false; rkOff = false; rkNeed = 0; rkSide = 0; rkT = 0; }
+  // the window: her rise, from the crack until she stands; never past maxT s from the crack, nor with her threat up (in play her threat is
+  // held at 0 until she stands: BURY.holdRise; a lab hold or a rise that never finishes cannot keep the crane over a fight)
+  const win = her && !L.dormant && !L.calmed && !!L.cracked && !L.hasStood && rkT < C.maxT && !((L.threatE || 0) > C.threat);
   if (!C.on || (!win && rkK === 0 && rkTo === 0)) { rkWhy = !C.on ? 'off' : 'none'; if (!her) { rkK = rkFrom = rkTo = 0; rkU = 1; } return; }
   const R = L.R || 10, P = player.pos;
   const ax = P.x - L.pos.x, az = P.z - L.pos.z, bAway = Math.atan2(az, ax);
+  if (rkOpen || win) rkT += Math.min(dt, 0.05);
   if (win && !rkOpen) {
     rkOpen = true; rkY0 = player.yaw; rkP0 = player.pitch; rkPath = 0; if (rkRecent > C.lookNet * d2r) rkOff = true;
     rkNeed = 1 - ccStep(C.near[0] * R, C.near[1] * R, Math.hypot(ax, az));
-    rkD = C.dR * R; rkH = C.hR * R; rkAlt = 0;
+    rkD = C.dR * R; rkH = C.hR * R; rkDb = 0; rkAlt = 0;
   } else if (rkOpen) {
     rkPath += dl;
     if (Math.abs(player.yaw - rkY0) + Math.abs(player.pitch - rkP0) > C.lookNet * d2r || rkPath > C.lookPath * d2r) rkOff = true;
@@ -1856,13 +1875,17 @@ function riseCraneFrame(dt, zi, inCrack) {
   // the crane's reach and height: the current pair while it is clear, else the first clear alternative; slid toward it
   _piv.copy(P); _piv.y += DECK_PIVOT;
   const d0 = C.dR * R, h0 = C.hR * R;
-  if (!rkClear(_piv, rkB, d0 + C.alts[rkAlt][0], h0 + C.alts[rkAlt][1], zi)) {
+  const A = C.alts;
+  if (!rkClear(_piv, rkB + A[rkAlt][2] * d2r, d0 + A[rkAlt][0], h0 + A[rkAlt][1], zi)) {
     rkBlockN++;
-    for (let i = 0; i < C.alts.length; i++) if (i !== rkAlt && rkClear(_piv, rkB, d0 + C.alts[i][0], h0 + C.alts[i][1], zi)) { rkAlt = i; break; }
+    for (let i = 0; i < A.length; i++) if (i !== rkAlt && rkClear(_piv, rkB + A[i][2] * d2r, d0 + A[i][0], h0 + A[i][1], zi)) { rkAlt = i; break; }
   }
-  const dT = d0 + C.alts[rkAlt][0], hT = h0 + C.alts[rkAlt][1], s = C.slide * Math.min(dt, 0.05);
-  const md = clamp(dT - rkD, -s, s), mh = clamp(hT - rkH, -s, s); rkD += md; rkH += mh;
-  if (Math.abs(md) + Math.abs(mh) > rkSlideMax) rkSlideMax = Math.abs(md) + Math.abs(mh);
+  // slid toward the chosen spot: reach and height at most `slide` u/s, the bearing offset at most `slide` u/s of arc at the reach
+  const dT = d0 + A[rkAlt][0], hT = h0 + A[rkAlt][1], bT = A[rkAlt][2] * d2r, s = C.slide * Math.min(dt, 0.05);
+  const md = clamp(dT - rkD, -s, s), mh = clamp(hT - rkH, -s, s), mb = clamp(bT - rkDb, -s / Math.max(rkD, 1), s / Math.max(rkD, 1));
+  rkD += md; rkH += mh; rkDb += mb;
+  const sl = Math.abs(md) + Math.abs(mh) + Math.abs(mb) * rkD; if (sl > rkSlideMax) rkSlideMax = sl;
+  rkB += rkDb; rkRot += rkDb;
   rkN++; if (L.hasStood) rkNStood++; if ((L.threatE || 0) > 0.3) rkNThreat++;
 }
 // blend the lens target (camDesired) toward the crane, in polar form about his pivot (an arc round him, never a chord through him)
@@ -1877,7 +1900,7 @@ function riseCrane() {
   camDesired.set(P.x + Math.cos(b) * d, py + h, P.z + Math.sin(b) * d);
 }
 window.__risecrane = { knobs: RISECRANE, state: () => ({ k: +rkK.toFixed(4), to: rkTo, why: rkWhy, need: +rkNeed.toFixed(3), side: rkSide, off: rkOff, bearingDeg: +(rkB * 57.29578).toFixed(2),
-  d: +rkD.toFixed(3), h: +rkH.toFixed(3), alt: rkAlt, n: rkN, nStood: rkNStood, nThreat: rkNThreat, blockN: rkBlockN, slideMax: +rkSlideMax.toFixed(4) }) };
+  d: +rkD.toFixed(3), h: +rkH.toFixed(3), offDeg: +(rkDb * 57.29578).toFixed(2), alt: rkAlt, t: +rkT.toFixed(3), kelpN: rkKelpN, n: rkN, nStood: rkNStood, nThreat: rkNThreat, blockN: rkBlockN, slideMax: +rkSlideMax.toFixed(4) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),
   drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardTgt: creGuardTgt, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4) }) };
 function deckTarget() {
