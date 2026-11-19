@@ -113,6 +113,25 @@ against explicit contracts and reviewed on return.
   POINTCAM's rules and helpers keyed to the rise (from the crack while her sand pours, `until` 4.0 s, before she stands), aimed at the edge of
   her back nearest the lens; none of the turn with the lens pressed within `near` 2.6-4.5 u of his bonnet; hands back over ~1.3 s (wOut 3). The behind gate (a turn past maxYaw + behind) carries `hyst` 5 deg like POINTCAM's; a real look or a pause is read
   through the hand-back too (a look there zeroes the cue at once).
+  RISECRANE (risecrane 2026-11-19, card roadmap/rise-camera-swing.md; Michael: "do 2", a better rise camera, "pull the camera up and back while
+  she rises, instead of the sideways swing"; `RISECRANE` / `__risecrane` in game.js) MOVES the lens over her rise, the one cue that does (RISECAM
+  still does only the last rotation, on top of it). Velkath is R ~15.4 u and her legs unfold out to ~1.6 R, so within ~25 u of her the follow
+  lens behind him was among her legs as she came up (main: inside a leg up to 35 frames, guard pops to 1.08 u, his helmet out of frame up to 54
+  frames; riseclip-probe). Point tests of the spot round him over the whole rise (riseclip-probe CP_SCAN) found one place clear in every case:
+  the side of him AWAY from her centre, 9+ u out. So from the crack until she stands the lens target is blended (polar, about his helmet: an arc
+  round him, never a chord through him) toward a spot on his boom's bearing turned into a `cone` 25 deg about straight-away-from-her (the
+  shorter way, the side latched at the crack), `dR` 0.7 R out (10.8 u) and `hR` 0.28 R (4.3 u) over his helmet, and the base aim to `aimAhead`
+  6 u past him along that line (BOSSCAM's lean and RISECAM's turn still apply after). Facing her he only rises and backs off; back to her the
+  lens comes round to look at him with her rising behind him. k is a smoothstep ramp, `tIn` 1.6 s up from the crack, `tOut` 1.8 s back from the
+  stand (finite: k is exactly 0 by stood + 1.8 s, before a hunt can cock a blow; her threat is held at 0 until she stands). `need` is latched at
+  the crack from his distance to her centre (1 inside 1.5 R, 0 past 2.0 R); one move a rise, it never re-engages. The crane spot is point-tested
+  against her (`m` 0.6 u, and `ahead` 6 frames of her limbs' motion) and the world (clearCamDistance on its own line); blocked, it slides at
+  most `slide` 5 u/s to the first clear of `alts` (higher, then nearer). A real look (RISECAM's 5 deg net / 15 deg path, its own tracker,
+  through the stand) or a pause hands back on the tOut ramp and it stays off that rise. Off the deck, the open crack and the throat. on: 0 = the
+  lens bit for bit (k never leaves 0). riseclip-probe (every case: inside 0, one-frame move relative to him <= 0.5 u, helmet in frame from the
+  wake to stand + 1.8 s) is GREEN on it and RED with CP_CRANE=0, which matches main by bars. Not barred, booked: a leg between the lens and
+  him (`occluded`), and `off`'s last 7 hand-back frames (k < 0.01), which are main's own fight framing arriving (BOSSCAM's lean on a pulled-in
+  boom drops his helmet under the frame for ~0.55 s on main too). fullplay-gate books the crane by phase (`crane`: rise / stood / calm / threat).
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
   Chroma, Grade, Finite) → EffectPass(SMAA, Vignette, Grain — grain lands AFTER the
   AA; the library runs effects order-as-given, no auto-sort). Composer is HalfFloat
@@ -910,7 +929,7 @@ against explicit contracts and reviewed on return.
   short lines, period voice ("BITUMEN — FOOD FOR THE PUMP").
 - Debug surfaces are namespaced on window and kept: player, survival, lev, zone,
   gameState, setState, playEnding, pred, wrecks, weather, __helm, __sky, __audio,
-  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __relief, __shaderFailed, __burial, __pointcam, __risecam.
+  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __relief, __shaderFailed, __burial, __pointcam, __risecam, __risecrane.
 - INVARIANTS checked before every commit (fresh tab): 14 lights in the scene; `__lev.fp(0/1/2)`
   15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 5c0705a1 (zones 1+2 d49d451d, Pallid b1c58f8d, Burned
   d2b6fb68; since THE RELIEF 2026-10-14, was 3b526986 since THE FISSURE 2026-10-10 and 119f0cae before);
