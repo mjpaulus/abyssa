@@ -116,22 +116,28 @@ against explicit contracts and reviewed on return.
   RISECRANE (risecrane 2026-11-19, card roadmap/rise-camera-swing.md; Michael: "do 2", a better rise camera, "pull the camera up and back while
   she rises, instead of the sideways swing"; `RISECRANE` / `__risecrane` in game.js) MOVES the lens over her rise, the one cue that does (RISECAM
   still does only the last rotation, on top of it). Velkath is R ~15.4 u and her legs unfold out to ~1.6 R, so within ~25 u of her the follow
-  lens behind him was among her legs as she came up (main: inside a leg up to 35 frames, guard pops to 1.08 u, his helmet out of frame up to 54
+  lens behind him was among her legs as she came up (main: inside a leg up to 35 frames, guard pops to 1.05 u, his helmet out of frame up to 54
   frames; riseclip-probe). Point tests of the spot round him over the whole rise (riseclip-probe CP_SCAN) found one place clear in every case:
   the side of him AWAY from her centre, 9+ u out. So from the crack until she stands the lens target is blended (polar, about his helmet: an arc
   round him, never a chord through him) toward a spot on his boom's bearing turned into a `cone` 25 deg about straight-away-from-her (the
   shorter way, the side latched at the crack), `dR` 0.7 R out (10.8 u) and `hR` 0.28 R (4.3 u) over his helmet, and the base aim to `aimAhead`
   6 u past him along that line (BOSSCAM's lean and RISECAM's turn still apply after). Facing her he only rises and backs off; back to her the
   lens comes round to look at him with her rising behind him. k is a smoothstep ramp, `tIn` 1.6 s up from the crack, `tOut` 1.8 s back from the
-  stand (finite: k is exactly 0 by stood + 1.8 s, before a hunt can cock a blow; her threat is held at 0 until she stands). `need` is latched at
-  the crack from his distance to her centre (1 inside 1.5 R, 0 past 2.0 R); one move a rise, it never re-engages. The crane spot is point-tested
-  against her (`m` 0.6 u, and `ahead` 6 frames of her limbs' motion) and the world (clearCamDistance on its own line); blocked, it slides at
-  most `slide` 5 u/s to the first clear of `alts` (higher, then nearer). A real look (RISECAM's 5 deg net / 15 deg path, its own tracker,
-  through the stand) or a pause hands back on the tOut ramp and it stays off that rise. Off the deck, the open crack and the throat. on: 0 = the
-  lens bit for bit (k never leaves 0). riseclip-probe (every case: inside 0, one-frame move relative to him <= 0.5 u, helmet in frame from the
-  wake to stand + 1.8 s) is GREEN on it and RED with CP_CRANE=0, which matches main by bars. Not barred, booked: a leg between the lens and
-  him (`occluded`), and `off`'s last 7 hand-back frames (k < 0.01), which are main's own fight framing arriving (BOSSCAM's lean on a pulled-in
-  boom drops his helmet under the frame for ~0.55 s on main too). fullplay-gate books the crane by phase (`crane`: rise / stood / calm / threat).
+  stand (finite: k is exactly 0 by stood + 1.8 s; her threat is held at 0 until she stands). The window also closes past `maxT` 9 s from the
+  crack or with her threat over `threat` 0.3 (a lab hold that never lets her stand), and ONE MOVE A RISE: once closed it stays closed until she
+  is asleep again (`rkDone`). `need` is latched at the crack from his distance to her centre (1 inside 1.3 R = 20 u, 0 past 1.6 R = 24.6 u; the
+  bench's z0b at 30 u is 0, so clawcam-probe never sees it: its own books, printed at the end, read n 0). The crane spot is point-tested
+  against her (`m` 0.6 u, and `ahead` 6 frames of her limbs' motion), the world (clearCamDistance on its own line) and KELP (flora.js
+  `kelp.data`: `kelpR` 2.6 u round the spot, `kelpLine` 1.6 u at a third and two thirds of the way in to him: the camera has no plant colliders,
+  and on the beside take with wakeswap merged the spot sat in a kelp stand for ~1 s); blocked, it slides (`slide` 5 u/s) to the first clear
+  of `alts` [reach, height, bearing offset] (higher, 25 / 45 deg round, nearer), trying again only when the current one is blocked (no hunting).
+  A real look (RISECAM's 5 deg net / 15 deg path, its own tracker, through the stand) or a pause hands back on the tOut ramp and it stays off
+  that rise. Off the deck, the open crack and the throat. on: 0 = the lens bit for bit (k never leaves 0). riseclip-probe (every case: inside 0,
+  one-frame move relative to him <= 0.5 u, helmet in frame from the wake to stand + 1.8 s) is GREEN on it but for `off`'s last ~11 hand-back
+  frames, all with k 0: main's own fight framing arriving (BOSSCAM's lean on a pulled-in boom drops his helmet under the frame for ~0.5 s, main
+  17-18 frames in the same window); RED with CP_CRANE=0, which matches main by bars. Booked, not barred: a leg between the lens and him
+  (`occluded`). burial-probe rise (e) PASSES with it (lensMin 5.57, main FAILS 2.39 / lensBlk 1). fullplay-gate books the crane by phase
+  (`crane`: rise / stood / calm / threat): velfix-gate 25 / 0 / 0 / 0 on each route.
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
   Chroma, Grade, Finite) → EffectPass(SMAA, Vignette, Grain — grain lands AFTER the
   AA; the library runs effects order-as-given, no auto-sort). Composer is HalfFloat
