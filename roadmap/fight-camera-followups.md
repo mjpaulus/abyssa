@@ -2,7 +2,7 @@
 title: Fight camera follow-ups
 status: backlog
 tags: camera, brooder, game.js
-updated: 2026-10-15
+updated: 2026-11-22
 ---
 What the merged fight-camera fix left open: under Velkath, Sal's boot soles can fill the screen when he hauls flat; her body hides the wards more often from the low camera; and after the calm the camera can still end up inside her when her claws close round him.
 
@@ -19,3 +19,4 @@ What the merged fight-camera fix left open: under Velkath, Sal's boot soles can 
 
 ## Log
 - 2026-10-15 — created when Michael merged the fight-camera fix as it stood.
+- 2026-11-22 — parked under card home-done-enough: only a playtest finding reopens one of these items (Michael: "do all 6").

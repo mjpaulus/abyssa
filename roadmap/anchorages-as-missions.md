@@ -1,8 +1,8 @@
 ---
 title: The other anchorages as missions
-status: backlog
+status: next
 tags: chart, design, user
-updated: 2026-10-15
+updated: 2026-11-22
 ---
 Michael pictures the other anchorages as different missions, each feeling unique. Parked for now: the focus is getting home right first. Until then they stay in the game and must keep working, but get no new tuning or polish.
 
@@ -28,3 +28,4 @@ Michael pictures the other anchorages as different missions, each feeling unique
 
 ## Log
 - 2026-10-15 — created from Michael's words after he asked what the anchorages are for; parked until home is right.
+- 2026-11-22 — unparked to Up Next (Michael: "do all 6", step 6 of the repo review). It follows zones 1-2 (card zone1-to-home-bar): first a brainstorm of what a mission is, then a spec.
