@@ -266,7 +266,9 @@ if (MODE === 'mouse' || MODE === 'all') {
         if (prev < 0.90 && L.hamPh >= 0.90) landed = true; if (landed) after++; prev = L.hamPh; if (landed && after > 36) return false; }, { render: true });
       return { frames, maxTilt }; };
     const out = {};
+    const crane0 = window.__risecrane ? window.__risecrane.state() : null;
     out.before = intoCock();
+    out.crane = [crane0, window.__risecrane ? window.__risecrane.state() : null];
     P.yaw -= 4 * PX; B.step(1, () => X.keep(), { render: true });
     out.nudge = { tiltDeg: st().tiltDeg, why: st().why, netDeg: st().lookNetDeg };
     let j = 0; B.step(20, () => { X.keep(); P.yaw += (j++ % 2 ? 3 : -3) * PX; }, { render: true });
@@ -333,6 +335,7 @@ if (MODE === 'hunt' || MODE === 'all') {
     why: H.reduce((a, e) => (a[e.why] = (a[e.why] || 0) + 1, a), {}) };
   writeFileSync(`${OUT}/clawcam-${TAG}-hunt.json`, JSON.stringify(H));
   console.log('hunt', JSON.stringify(summary.hunt));
+  console.log('crane', JSON.stringify(await c.ev(`window.__risecrane ? window.__risecrane.state() : null`)));   // (risecrane) the rise crane's own books over the whole run: n = frames it was ever on
   asserts.push({ name: 'HUNT (un-held) his bonnet in frame on every frame', value: summary.hunt.helmIn, pass: helmIn === H.length });
 }
 
