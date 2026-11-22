@@ -79,7 +79,7 @@ function silt(S, rand, H, A, R) {
 }
 
 function sediment(S, rand, H, A, R) {
-  const big = worley(rand, 15, 0.95), mid = worley(rand, 27, 0.95), small = worley(rand, 50, 0.9);
+  const big = worley(rand, 23, 0.95), mid = worley(rand, 41, 0.95), small = worley(rand, 78, 0.9);
   const grit = [128, 256, 512].map(n => lattice(rand, n)), patch = [4, 8, 16].map(n => lattice(rand, n));
   const skin = [64, 128].map(n => lattice(rand, n));
   for (let y = 0; y < S; y++) { const v = y / S; for (let x = 0; x < S; x++) {
@@ -88,20 +88,22 @@ function sediment(S, rand, H, A, R) {
     const b = big(u, v), bf1 = b.f1, bid = b.id, bE = b.f2 - b.f1;
     const m = mid(u, v), mf1 = m.f1, mid_ = m.id, mE = m.f2 - m.f1;
     const s = small(u, v), sf1 = s.f1, sid = s.id, sE = s.f2 - s.f1;
-    // stones fill their cells (packed gravel), sized by id; bigger stones where the patch field says
-    const db = bid > 0.55 - 0.35 * p ? Math.max(0, 1 - (bf1 / (0.44 + 0.10 * bid)) ** 2) * sst(0, 0.25, bE) : 0;
-    const dm = mid_ > 0.2 ? Math.max(0, 1 - (mf1 / (0.42 + 0.10 * mid_)) ** 2) * sst(0, 0.25, mE) : 0;
-    const ds = Math.max(0, 1 - (sf1 / 0.45) ** 2) * sst(0, 0.25, sE);
+    // LOOSE gravel: stones sized by id well inside their cells, only some cells hold one (the patch field
+    // thins them), so grit shows between them and the gaps never join into a network
+    const db = bid > 0.62 - 0.30 * p ? Math.max(0, 1 - (bf1 / (0.22 + 0.16 * bid)) ** 2) * sst(0, 0.15, bE) : 0;
+    const dm = mid_ > 0.35 - 0.2 * p ? Math.max(0, 1 - (mf1 / (0.24 + 0.16 * mid_)) ** 2) * sst(0, 0.15, mE) : 0;
+    const ds = sid > 0.25 ? Math.max(0, 1 - (sf1 / (0.25 + 0.15 * sid)) ** 2) * sst(0, 0.15, sE) : 0;
     const g = fbm(grit, u, v) - 0.5, sk = fbm(skin, u, v) - 0.5;
     const domeB = Math.sqrt(db), domeM = Math.sqrt(dm), domeS = Math.sqrt(ds);
-    let h = 0.18 * domeS, tone = 0.3 + 0.5 * sid, gloss = 0.2 * domeS;
-    if (0.10 + 0.28 * domeM > h && dm > 0) { h = 0.10 + 0.28 * domeM; tone = 0.15 + 0.75 * mid_; gloss = 0.5 * domeM; }
-    if (0.16 + 0.36 * domeB > h && db > 0) { h = 0.16 + 0.36 * domeB; tone = 0.1 + 0.85 * bid; gloss = 0.7 * domeB; }
-    const lit = Math.max(domeB, domeM, domeS);
-    H[i] = h + 0.05 * g + 0.03 * sk;
-    // the stones' own tone, rimmed dark where they meet (contact shadow), the grit between them near black
-    const rim = Math.max(domeB > 0 ? domeB : 0, domeM > 0 ? domeM : 0, domeS * 0.7);
-    A[i] = (0.08 + tone) * (0.25 + 0.75 * Math.sqrt(rim)) + 0.18 * g + 0.12 * sk;
+    let h = 0.14 * domeS, tone = 0.3 + 0.55 * sid, gloss = 0.2 * domeS, on = domeS;
+    if (0.08 + 0.26 * domeM > h && dm > 0) { h = 0.08 + 0.26 * domeM; tone = 0.15 + 0.75 * mid_; gloss = 0.5 * domeM; on = domeM; }
+    if (0.12 + 0.34 * domeB > h && db > 0) { h = 0.12 + 0.34 * domeB; tone = 0.1 + 0.85 * bid; gloss = 0.7 * domeB; on = domeB; }
+    H[i] = h + 0.07 * g + 0.03 * sk;
+    // a stone's own tone with a thin dark contact rim; between stones the grit's mid tone and speckle
+    const ground = 0.32 + 0.45 * g + 0.15 * sk;
+    const stone = (0.08 + tone) * (0.45 + 0.55 * Math.sqrt(on));
+    const cover = sst(0, 0.12, on);
+    A[i] = ground * (1 - cover) + stone * cover - 0.12 * (1 - sst(0.0, 0.35, on)) * cover;
     R[i] = 0.75 + 0.35 * g - 0.5 * gloss + 0.1 * sk;
   } }
 }
