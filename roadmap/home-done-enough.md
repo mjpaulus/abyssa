@@ -20,3 +20,4 @@ What "home is right" means, written down so the polishing stops. When every line
 
 ## Log
 - 2026-11-22 — created from Michael's "do all 6" on the repo review's next steps.
+- 2026-11-22 — line 1 holds: the rise camera merged (PR #4). Line 2 is PR #5 (`terrain-gen`), verified (LOAD PASS, no jpg requests) and waiting on Michael's look at open seabed.
