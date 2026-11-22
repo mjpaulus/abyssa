@@ -79,7 +79,7 @@ function silt(S, rand, H, A, R) {
 }
 
 function sediment(S, rand, H, A, R) {
-  const big = worley(rand, 34, 0.95), mid = worley(rand, 61, 0.95), small = worley(rand, 113, 0.9);
+  const big = worley(rand, 15, 0.95), mid = worley(rand, 27, 0.95), small = worley(rand, 50, 0.9);
   const grit = [128, 256, 512].map(n => lattice(rand, n)), patch = [4, 8, 16].map(n => lattice(rand, n));
   const skin = [64, 128].map(n => lattice(rand, n));
   for (let y = 0; y < S; y++) { const v = y / S; for (let x = 0; x < S; x++) {
@@ -99,7 +99,9 @@ function sediment(S, rand, H, A, R) {
     if (0.16 + 0.36 * domeB > h && db > 0) { h = 0.16 + 0.36 * domeB; tone = 0.1 + 0.85 * bid; gloss = 0.7 * domeB; }
     const lit = Math.max(domeB, domeM, domeS);
     H[i] = h + 0.05 * g + 0.03 * sk;
-    A[i] = tone * (0.55 + 0.45 * lit) + 0.25 * g + 0.15 * sk;
+    // the stones' own tone, rimmed dark where they meet (contact shadow), the grit between them near black
+    const rim = Math.max(domeB > 0 ? domeB : 0, domeM > 0 ? domeM : 0, domeS * 0.7);
+    A[i] = (0.08 + tone) * (0.25 + 0.75 * Math.sqrt(rim)) + 0.18 * g + 0.12 * sk;
     R[i] = 0.75 + 0.35 * g - 0.5 * gloss + 0.1 * sk;
   } }
 }
