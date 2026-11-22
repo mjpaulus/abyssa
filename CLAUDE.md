@@ -331,7 +331,9 @@ against explicit contracts and reviewed on return.
   `RW_RED` noslope / nofloor / short20 exit 5 = the RED failed as it must, 3 = it did not; `selftest` is offline),
   `seating-probe.mjs` (nothing the game puts on the ground hovers or sinks: props, nodes, debris, her relics and
   moult, egg skins, the skiff's kit, the seeded motes; every vertex; `SP_RED` prop-lift / node-sink / node-boulder).
-  Triplanar CC0 PBR (channel-packed, 3.3 MB) multiplies ON TOP of zone palettes:
+  Triplanar PBR detail (channel-packed; GENERATED since 2026-11-22: lib/terrainMaps.js bakes silt / gravel /
+  rock at 512^2 in a module worker at boot, ~1.3 s, moment-matched to the AmbientCG jpgs it replaced, which were
+  the last downloaded asset in the game; `pbrReady`) multiplies ON TOP of zone palettes:
   texture = structure, palette = hue. ROCKS (flora.js) use a GENERATED rock map set
   (lib/textures.js rockMapSet, two variants) triplanar via onBeforeCompile + screen-
   derivative relief; cleavage faces are pure functions of existing stream draws.
@@ -957,7 +959,7 @@ against explicit contracts and reviewed on return.
 - Reversed-edge `smoothstep(a,b,x)` with a>=b is GLSL UB and returns 0 on this
   driver — it silently killed eleven art systems for months. Always `1.0 -
   smoothstep(lo, hi, x)`. Transparent DoubleSide materials need `forceSinglePass`.
-- Licenses: every borrowed asset gets a CREDITS.md line (props, textures, models).
+- No borrowed assets remain (2026-11-22: the AmbientCG terrain maps were the last). Never add one: the hard rule.
 
 ## THE WORKING CHART (feature board — keep it inked)
 
