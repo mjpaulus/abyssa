@@ -1798,12 +1798,14 @@ window.__risecam = { knobs: RISECAM, state: () => ({ beh: rcBeh, k: +rcK.toFixed
 //     crack from his distance to her centre (1 at near[0] x R, 0 at near[1] x R: 20 / 24.6 u; bench z0b, 30 u, is 0); it never re-engages in the same rise. The hand-back
 //     starts when she has stood and takes tOut s, so k is exactly 0 by stood + tOut: before her hunt's first blow can cock. Off the open crack,
 //     the deck and the throat.
-//   - the mouse owns the view: a real look (RISECAM's 5 deg net / 15 deg path from the crack) or a pause hands back at once (on the tOut ramp)
-//     and it stays off for the rest of the rise.
+//   - HELD THROUGH THE RISE (Michael 2026-11-22, "do all 6, I already made all those calls": the recommendation to hold): with `hold` 1 a
+//     mouse look does not hand back; the crane keeps the view until she stands (or maxT), then hands back on the tOut ramp. A pause still
+//     hands back at once (the house rule) and it stays off for the rest of the rise. hold 0 = the first build: a real look (RISECAM's 5 deg
+//     net / 15 deg path from the crack) hands back at once.
 // on: 0 = today's lens bit for bit (every statement below is behind k > 0 or the window; k never leaves 0). `__risecrane.state()`.
 const RISECRANE = { on: 1, near: [1.3, 1.6], cone: 25, dR: 0.7, hR: 0.28, aimAhead: 6, aimUp: 1.6, tIn: 1.6, tOut: 1.8, maxT: 9, threat: 0.3, m: 0.6, ahead: 6,
   kelpR: 2.6, kelpLine: 1.6, slide: 5, alts: [[0, 0, 0], [0, 2, 0], [0, 0, 25], [0, 0, -25], [0, 2, 25], [0, 2, -25], [0, 0, 45], [0, 0, -45], [-2, 2, 0], [-4, 4, 0], [-2, 2, 45], [-2, 2, -45]],
-  lookNet: 5, lookPath: 15, lookTau: 0.3 };
+  lookNet: 5, lookPath: 15, lookTau: 0.3, hold: 1 };
 let rkK = 0, rkFrom = 0, rkTo = 0, rkU = 1, rkDur = 1, rkNeed = 0, rkSide = 0, rkOpen = false, rkOff = false, rkDone = false, rkY0 = 0, rkP0 = 0, rkPath = 0, rkRecent = 0;
 let rkYawWas = 0, rkPitchWas = 0, rkD = 0, rkH = 0, rkDb = 0, rkT = 0, rkKelpN = 0, rkAlt = 0, rkB = 0, rkRot = 0, rkWhy = '', rkN = 0, rkNStood = 0, rkNThreat = 0, rkBlockN = 0, rkWorldN = 0, rkSlideMax = 0;
 const _rkS = V3(), _rkDir = V3();
@@ -1849,12 +1851,12 @@ function riseCraneFrame(dt, zi, inCrack) {
   const ax = P.x - L.pos.x, az = P.z - L.pos.z, bAway = Math.atan2(az, ax);
   if (rkOpen || win) rkT += Math.min(dt, 0.05);
   if (win && !rkOpen) {
-    rkOpen = true; rkY0 = player.yaw; rkP0 = player.pitch; rkPath = 0; if (rkRecent > C.lookNet * d2r) rkOff = true;
+    rkOpen = true; rkY0 = player.yaw; rkP0 = player.pitch; rkPath = 0; if (!C.hold && rkRecent > C.lookNet * d2r) rkOff = true;
     rkNeed = 1 - ccStep(C.near[0] * R, C.near[1] * R, Math.hypot(ax, az));
     rkD = C.dR * R; rkH = C.hR * R; rkDb = 0; rkAlt = 0;
   } else if (rkOpen) {
     rkPath += dl;
-    if (Math.abs(player.yaw - rkY0) + Math.abs(player.pitch - rkP0) > C.lookNet * d2r || rkPath > C.lookPath * d2r) rkOff = true;
+    if (!C.hold && (Math.abs(player.yaw - rkY0) + Math.abs(player.pitch - rkP0) > C.lookNet * d2r || rkPath > C.lookPath * d2r)) rkOff = true;
   }
   if (paused) rkOff = true;
   const tgt = win && !rkOff && deckK === 0 && !inCrack && !throatOn ? rkNeed : 0;
