@@ -1,9 +1,10 @@
-// Triplanar PBR sediment detail — loader + GLSL. OWNED BY: terrain agent.
+// Triplanar PBR sediment detail — generated maps + GLSL. OWNED BY: terrain agent.
 //
-// The three AmbientCG sets are channel-packed so the whole system costs five texture
-// units instead of nine: albedo and roughness are pure structure (greyscale, level-
-// normalised to a 0.5 mean at bake time), so silt/sediment/rock ride in R/G/B of one
-// map each. Only the normal maps need their own RGB and stay separate.
+// Three seabed materials (silt / sediment / rock) are channel-packed so the whole system costs five texture
+// units instead of nine: albedo and roughness are pure structure (greyscale, level-normalised to a 0.5 mean),
+// so the three ride in R/G/B of one map each. Only the normal maps need their own RGB and stay separate.
+// GENERATED (lib/terrainMaps.js, baked in a module worker at boot) under the HARD RULE; until 2026-11-22
+// these were downloaded AmbientCG jpgs, and the generated set is moment-matched to them (see its header).
 //
 // Everything here is STRUCTURE. Colour comes from the caller's zone palette — the
 // shader helpers below return values centred on 1.0 that are meant to be multiplied
@@ -11,13 +12,13 @@
 import * as THREE from 'three';
 import { maxAniso } from './textures.js';
 import { styleUniforms, EDGE_GLSL } from './paint.js';
+import { bakeTerrainMaps } from './terrainMaps.js';
 
-const BASE = 'assets/textures/';
+const SIZE = 512;
+let fadeT0 = 0;
 
-let pending = 0, fadeT0 = 0;
-
-// Ramps 0->1 once every map is decoded; multiplied into the detail contribution so
-// the swap-in from three's 1x1 placeholder reads as a short fade, not a pop.
+// Ramps 0->1 once the maps are baked; multiplied into the detail contribution so
+// the swap-in from the 1x1 placeholder reads as a short fade, not a pop.
 export const texAmt = { value: 0 };
 function fade() {
   const k = Math.min(1, (performance.now() - fadeT0) / 450);
@@ -25,26 +26,48 @@ function fade() {
   if (k < 1) requestAnimationFrame(fade);
 }
 
-function load(file) {
-  pending++;
-  const t = new THREE.TextureLoader().load(BASE + file, () => {
-    if (--pending === 0) { fadeT0 = performance.now(); fade(); }
-  }, undefined, () => { if (--pending === 0) { texAmt.value = 0; } });
+// All five maps are non-colour data: packed structure masks and tangent normals.
+function dataTex(data, S) {
+  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.generateMipmaps = S > 1;
+  t.minFilter = S > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
   t.anisotropy = maxAniso();
-  // All five maps are non-colour data: packed structure masks and tangent normals.
   t.colorSpace = THREE.NoColorSpace;
+  t.needsUpdate = true;
   return t;
 }
+// The placeholder until the bake lands (texAmt is 0 then, so its value never shows): mid grey, flat normal.
+const GREY = dataTex(new Uint8Array([128, 128, 128, 255]), 1), FLAT = dataTex(new Uint8Array([128, 128, 255, 255]), 1);
 
-// Loaded asynchronously; nothing here blocks first render.
 export const PBR = {
-  albedo: load('albedo_pack.jpg'),   // R silt, G sediment, B rock
-  rough:  load('rough_pack.jpg'),    // R silt, G sediment, B rock
-  nSilt:  load('normal_silt.jpg'),
-  nSed:   load('normal_sediment.jpg'),
-  nRock:  load('normal_rock.jpg')
+  albedo: GREY,   // R silt, G sediment, B rock
+  rough: GREY,    // R silt, G sediment, B rock
+  nSilt: FLAT,
+  nSed: FLAT,
+  nRock: FLAT
 };
+
+// the bake's bytes -> the five textures, swapped into the shared uniforms (no program changes: a sampler2D either way)
+function install(m) {
+  const S = m.size;
+  PBR.albedo = dataTex(m.albedo, S); PBR.rough = dataTex(m.rough, S);
+  PBR.nSilt = dataTex(m.nSilt, S); PBR.nSed = dataTex(m.nSed, S); PBR.nRock = dataTex(m.nRock, S);
+  pbrUniforms.uPAlb.value = PBR.albedo; pbrUniforms.uPRgh.value = PBR.rough;
+  pbrUniforms.uPNS.value = PBR.nSilt; pbrUniforms.uPNG.value = PBR.nSed; pbrUniforms.uPNR.value = PBR.nRock;
+  fadeT0 = performance.now(); fade();
+}
+// Baked off the main thread (~1.3 s of scalar JS); a page without module workers bakes inline on the next task.
+export const pbrReady = new Promise((resolve) => {
+  const inline = () => setTimeout(() => { install(bakeTerrainMaps(SIZE)); resolve(); }, 0);
+  try {
+    const w = new Worker(new URL('./terrainMaps.worker.js', import.meta.url), { type: 'module' });
+    w.onmessage = (e) => { install(e.data); w.terminate(); resolve(); };
+    w.onerror = (e) => { e.preventDefault && e.preventDefault(); w.terminate(); inline(); };
+    w.postMessage({ size: SIZE });
+  } catch (e) { inline(); }
+});
 
 export const pbrUniforms = {
   uPAlb: { value: PBR.albedo },

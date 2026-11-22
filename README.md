@@ -24,13 +24,14 @@ Open http://localhost:8777 and click to descend.
 |---|---|
 | Mouse | Look |
 | WASD | Move (walking is heavy — you're in lead boots) |
-| Space / Ctrl | Rise / sink |
-| Shift | Boost swim — or fire the **air thruster** once found (it burns your air) |
+| Space | Air pack: tap to hop, hold to burst (the pump refills its reserve down the hose) |
+| C | Sink |
+| Shift | Walk a little faster (does nothing off the bottom) |
 | Left click | The blade: the dive knife's slash; once Velkath's old harpoon is pulled, its two-handed thrust |
 | Right click | Spear gun (once found; spent spears can be recovered) |
 | Q | Vent an ink sac — breaks a hunting shark's charge |
 | T | Sonar ping (once found) |
-| E / F | Take relics · craft hose / refuel pump at the raft |
+| E / F | Take, use, pull · craft hose / refuel pump at the raft |
 | P | Diagnostic: bypass all post-processing |
 
 ## The loop
@@ -45,29 +46,27 @@ Open http://localhost:8777 and click to descend.
   steal your lantern light, and squid stalk the abyss drawn to your flame. Squid can
   be killed — their ink is your shark counterplay.
 - **Three wrecks hide three tools.** A sounding set (sonar), a spear gun, and an air
-  thruster, each aboard a period wreck worth finding for its own sake.
+  thruster that enlarges the air pack's reserve, each aboard a period wreck worth finding for its own sake.
 - **Weather is real.** A 12-minute day cycle, storms that heave the raft, churn the
   shallows, and make the pump gasp — while the deep stays indifferent.
 - Calm the last sleeper, pass the final rift, and the trench lets you go.
 
 ## Tech notes
 
-- Three.js r160 via CDN importmap; `postprocessing` + `n8ao` for the post stack
+- Three.js r184 via CDN importmap; `postprocessing` + `n8ao` for the post stack
   (N8AO ambient occlusion, SMAA, bloom, DoF, film grade) plus a custom half-res
   raymarched volumetric-light pass with screen-space occlusion.
 - Custom per-channel Beer–Lambert water optics patched into every material's fog path.
-- Rapier physics (WASM) for seafloor debris; verlet rope for the air hose.
-- Almost everything is procedural: the diver, the leviathans, wrecks, terrain,
-  creatures, and all their animation (GPU vertex work wherever possible). Terrain
-  detail uses CC0 photographed PBR sets, triplanar-mapped.
+- Verlet rope for the air hose (seabed debris is static; Rapier is gone).
+- Everything is generated in code (the hard rule): the diver, the leviathans, wrecks,
+  terrain and its triplanar detail maps, creatures, audio, and all their animation (GPU
+  vertex work wherever possible). Baked assets under `assets/` rebuild from committed
+  scripts with fixed seeds (`node tools/blender/build.mjs <set>`).
 - Deterministic weather and storm schedule — a session replays identically.
 
 ## Credits
 
-- Props: all generated in code (the hard rule) — see `assets/props/CREDITS.md`
-- Terrain textures: AmbientCG (CC0) — see `assets/textures/CREDITS.md`
-- Optional Mark V helmet model: Egor Gulyushkin / BeaVex (CC-BY) — see
-  `assets/models/CREDITS.md`
+- No third-party assets: every model, texture and sound is generated in code.
 - Built with [Claude Code](https://claude.com/claude-code)
 
 License: GPL-3.0 (see LICENSE).
